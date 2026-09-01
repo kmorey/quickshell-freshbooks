@@ -1,0 +1,229 @@
+var MS_PER_DAY = 24 * 60 * 60 * 1000
+
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function finiteNumber(value, fallback) {
+  var number = Number(value)
+  return isFinite(number) ? number : fallback
+}
+
+function integerSeconds(value) {
+  return Math.max(0, Math.round(finiteNumber(value, 0)))
+}
+
+function pad2(value) {
+  var number = Math.round(Number(value))
+  return (number < 10 ? "0" : "") + number
+}
+
+function dateKey(year, month, day) {
+  return Math.round(Number(year)) + "-" + pad2(month) + "-" + pad2(day)
+}
+
+function parseDateKey(value) {
+  var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""))
+  if (!match) return null
+  var year = Number(match[1])
+  var month = Number(match[2])
+  var day = Number(match[3])
+  var date = new Date(Date.UTC(year, month - 1, day))
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null
+  return { year: year, month: month, day: day }
+}
+
+function addDays(key, amount) {
+  var parsed = parseDateKey(key)
+  if (!parsed) return ""
+  var date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + Math.round(finiteNumber(amount, 0))))
+  return dateKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate())
+}
+
+function sundayWeek(key) {
+  var parsed = parseDateKey(key)
+  if (!parsed) return { start: "", end: "", days: [] }
+  var date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day))
+  var start = addDays(key, -date.getUTCDay())
+  var days = []
+  for (var i = 0; i < 7; i++) days.push(addDays(start, i))
+  return { start: start, end: days[6], days: days }
+}
+
+function calendarMonth(year, month) {
+  var normalized = new Date(Date.UTC(Math.round(Number(year)), Math.round(Number(month)) - 1, 1))
+  var viewYear = normalized.getUTCFullYear()
+  var viewMonth = normalized.getUTCMonth() + 1
+  var first = dateKey(viewYear, viewMonth, 1)
+  var firstWeek = sundayWeek(first)
+  var cells = []
+  for (var i = 0; i < 42; i++) {
+    var key = addDays(firstWeek.start, i)
+    var parsed = parseDateKey(key)
+    cells.push({
+      key: key,
+      day: parsed.day,
+      inMonth: parsed.year === viewYear && parsed.month === viewMonth,
+      row: Math.floor(i / 7),
+      column: i % 7
+    })
+  }
+  return cells
+}
+
+function entryDateKey(entry) {
+  if (!entry) return ""
+  var local = String(entry.localDate || entry.date || "")
+  return parseDateKey(local) ? local : ""
+}
+
+function aggregateEntries(entries) {
+  var byDay = {}
+  var totalSeconds = 0
+  var values = asArray(entries)
+  for (var i = 0; i < values.length; i++) {
+    var entry = values[i] || {}
+    var key = entryDateKey(entry)
+    if (key === "") continue
+    var seconds = integerSeconds(entry.durationSeconds !== undefined ? entry.durationSeconds : entry.duration)
+    byDay[key] = integerSeconds(byDay[key]) + seconds
+    totalSeconds += seconds
+  }
+  return { byDay: byDay, totalSeconds: totalSeconds }
+}
+
+function reportingWeekTotal(entries, selectedDateKey) {
+  var week = sundayWeek(selectedDateKey)
+  if (week.start === "") return 0
+  var totals = aggregateEntries(entries).byDay
+  var seconds = 0
+  for (var i = 0; i < week.days.length; i++) seconds += integerSeconds(totals[week.days[i]])
+  return seconds
+}
+
+function timerCandidates(data) {
+  if (Array.isArray(data)) return data.slice()
+  if (!data || typeof data !== "object") return []
+  if (Array.isArray(data.timers)) return data.timers.slice()
+  if (Array.isArray(data.activeTimers)) return data.activeTimers.slice()
+  if (data.timer && typeof data.timer === "object") return [data.timer]
+  if (data.id !== undefined && (data.running !== undefined || data.isRunning !== undefined || data.isLogged === false)) return [data]
+  return []
+}
+
+function timerMode(timers) {
+  var count = asArray(timers).length
+  if (count === 0) return "none"
+  if (count === 1) return "single"
+  return "multiple"
+}
+
+function selectedTimer(timers, selectedId) {
+  var values = asArray(timers)
+  if (values.length === 0) return null
+  var wanted = String(selectedId === undefined || selectedId === null ? "" : selectedId)
+  if (wanted !== "") {
+    for (var i = 0; i < values.length; i++) {
+      if (String((values[i] || {}).id) === wanted) return values[i]
+    }
+  }
+  return values.length === 1 ? values[0] : null
+}
+
+function stateProjection(snapshot, selectedTimerId) {
+  var source = snapshot && typeof snapshot === "object" ? snapshot : {}
+  var timers = timerCandidates(source.timers !== undefined ? source.timers : source.activeTimers)
+  var entries = asArray(source.entries).slice()
+  var projects = asArray(source.projects).slice()
+  var activeTimer = selectedTimer(timers, selectedTimerId)
+  return {
+    timerMode: timerMode(timers),
+    activeTimer: activeTimer,
+    timerCandidates: timers,
+    projects: projects,
+    entries: entries,
+    totals: aggregateEntries(entries)
+  }
+}
+
+function timerRunning(timer) {
+  if (!timer) return false
+  return timer.running === true || timer.isRunning === true
+}
+
+function elapsedSeconds(timer, nowMs) {
+  if (!timer) return 0
+  var confirmed = integerSeconds(timer.elapsedSeconds !== undefined ? timer.elapsedSeconds : timer.durationSeconds)
+  if (!timerRunning(timer)) return confirmed
+  var observedAt = finiteNumber(timer.observedAtMs, NaN)
+  if (!isFinite(observedAt) && timer.observedAt) observedAt = Date.parse(String(timer.observedAt))
+  if (!isFinite(observedAt)) return confirmed
+  var now = finiteNumber(nowMs, observedAt)
+  return confirmed + Math.max(0, Math.floor((now - observedAt) / 1000))
+}
+
+function formatDuration(seconds) {
+  var value = integerSeconds(seconds)
+  var hours = Math.floor(value / 3600)
+  var minutes = Math.floor((value % 3600) / 60)
+  var remainder = value % 60
+  return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
+}
+
+function activeProject(project) {
+  if (!project) return false
+  return project.active !== false && project.complete !== true && project.archived !== true
+}
+
+function projectId(project) {
+  return String(project && project.id !== undefined ? project.id : "")
+}
+
+function projectLabel(project) {
+  if (!project) return ""
+  return String(project.clientName || "") + "\n" + String(project.name || project.title || "")
+}
+
+function recentProjectOrder(projects, entries, activeProjectId) {
+  var lastUsed = {}
+  var values = asArray(entries)
+  for (var i = 0; i < values.length; i++) {
+    var entry = values[i] || {}
+    var id = String(entry.projectId !== undefined ? entry.projectId : "")
+    if (id === "") continue
+    var timestamp = Date.parse(String(entry.startedAt || entry.updatedAt || ""))
+    if (!isFinite(timestamp)) timestamp = 0
+    if (lastUsed[id] === undefined || timestamp > lastUsed[id]) lastUsed[id] = timestamp
+  }
+
+  var activeId = String(activeProjectId === undefined || activeProjectId === null ? "" : activeProjectId)
+  var result = asArray(projects).filter(activeProject)
+  result.sort(function(a, b) {
+    var aId = projectId(a)
+    var bId = projectId(b)
+    if (aId === activeId && bId !== activeId) return -1
+    if (bId === activeId && aId !== activeId) return 1
+    var recent = finiteNumber(lastUsed[bId], 0) - finiteNumber(lastUsed[aId], 0)
+    if (recent !== 0) return recent
+    return projectLabel(a).localeCompare(projectLabel(b))
+  })
+  return result
+}
+
+if (typeof module !== "undefined") module.exports = {
+  addDays: addDays,
+  aggregateEntries: aggregateEntries,
+  calendarMonth: calendarMonth,
+  dateKey: dateKey,
+  elapsedSeconds: elapsedSeconds,
+  entryDateKey: entryDateKey,
+  formatDuration: formatDuration,
+  parseDateKey: parseDateKey,
+  recentProjectOrder: recentProjectOrder,
+  reportingWeekTotal: reportingWeekTotal,
+  selectedTimer: selectedTimer,
+  stateProjection: stateProjection,
+  sundayWeek: sundayWeek,
+  timerCandidates: timerCandidates,
+  timerMode: timerMode
+}
