@@ -5,7 +5,7 @@ An Omarchy 4 / Quickshell bar plugin for managing FreshBooks timers and reviewin
 The popup provides:
 
 - a live Timer tab with notes, explicit duration correction, pause/resume, and log
-- a Projects tab ordered by the active and most recently used projects, with one-click safe switching
+- a Projects tab ordered by the active and most recently used project/service combinations, with one-click safe switching
 - a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists
 - guided OAuth and business selection when FreshBooks has not been configured yet
 
@@ -40,7 +40,7 @@ npm test
 omarchy plugin validate .
 ```
 
-The Node test suite covers calendar/date behavior, timer projections, duration parsing, recent-project ordering, the fake CLI seam, and packaging contracts. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML; keyboard/pointer interaction and horizontal, vertical, narrow, and multi-monitor layouts remain part of that manual gate.
+The panel uses Omarchy's shared buttons, cursor surfaces, section headings, hero layout, and theme tokens so interaction states follow the rest of the shell. The Node test suite covers calendar/date behavior, timer projections, duration parsing, project/service recency, the fake CLI seam, and packaging contracts. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML; keyboard/pointer interaction and horizontal, vertical, narrow, and multi-monitor layouts remain part of that manual gate.
 
 ## Privacy
 

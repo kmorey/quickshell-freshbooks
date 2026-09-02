@@ -17,6 +17,7 @@ Panel {
   property string tab: "timer"
   property string projectSearch: ""
   property int keyboardCursor: 0
+  property bool cursorActive: false
   property bool calendarGridFocused: true
   property date today: new Date()
   property int viewYear: today.getFullYear()
@@ -97,6 +98,7 @@ Panel {
   }
 
   function open() {
+    cursorActive = false
     hydrateDrafts()
     refresh()
     controller.show()
@@ -117,6 +119,7 @@ Panel {
   function toggle() { opened ? close() : open() }
 
   function switchTab(direction) {
+    cursorActive = true
     var tabs = ["timer", "projects", "calendar"]
     var index = tabs.indexOf(tab)
     tab = tabs[(index + (direction > 0 ? 1 : 2)) % 3]
@@ -125,6 +128,10 @@ Panel {
   }
 
   function moveKeyboardCursor(dx, dy) {
+    if (!cursorActive) {
+      cursorActive = true
+      return
+    }
     if (tab === "calendar" && calendarGridFocused) {
       calendarCursorDateKey = Model.addDays(calendarCursorDateKey, dx + dy * 7)
       var cursor = Model.parseDateKey(calendarCursorDateKey)
@@ -142,6 +149,10 @@ Panel {
   }
 
   function activateKeyboardCursor() {
+    if (!cursorActive) {
+      cursorActive = true
+      return
+    }
     if (!timeTracking || timeTracking.busy) return
     if (tab === "timer") {
       if (keyboardCursor === 0) noteField.forceActiveFocus()
@@ -517,14 +528,22 @@ Panel {
 
           Repeater {
             model: ["timer", "projects", "calendar"]
-            Rectangle {
+            Button {
               required property string modelData
               width: (parent.width - Style.space(12)) / 3
               height: Style.space(34)
-              radius: Style.cornerRadius
-              color: root.tab === modelData ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
-              Text { anchors.centerIn: parent; text: modelData.toUpperCase(); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.tab = modelData; root.keyboardCursor = 0; root.calendarGridFocused = modelData === "calendar" } }
+              text: modelData.toUpperCase()
+              selected: root.tab === modelData
+              bordered: true
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: {
+                root.tab = modelData
+                root.keyboardCursor = 0
+                root.calendarGridFocused = modelData === "calendar"
+              }
             }
           }
         }
@@ -554,34 +573,33 @@ Panel {
               }
             }
 
-            Text {
+            PanelHero {
               width: parent.width
-              text: !root.timeTracking || !root.timeTracking.activeTimer ? "No active timer" : Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-              horizontalAlignment: Text.AlignHCenter
-            }
-            Text {
-              width: parent.width
-              text: {
-                if (!root.timeTracking || !root.timeTracking.activeTimer) return ""
+              title: {
+                if (!root.timeTracking || !root.timeTracking.activeTimer) return "No active timer"
                 var project = root.projectById(root.timeTracking.activeTimer.projectId)
-                return project ? String(project.clientName || "Internal") + " · " + String(project.title || "Project") : ""
+                return project
+                  ? String(project.clientName || "Internal") + " · " + String(project.title || "Project")
+                  : "Active timer"
               }
-              color: Qt.darker(root.foreground, 1.25)
-              font.family: root.fontFamily
-              horizontalAlignment: Text.AlignHCenter
-              elide: Text.ElideRight
-            }
-            Text {
-              width: parent.width
-              text: root.timeTracking && root.timeTracking.activeTimer ? String(root.timeTracking.activeTimer.note || "Untitled work") : "Choose a project to begin"
-              color: Qt.darker(root.foreground, 1.25)
-              font.family: root.fontFamily
-              horizontalAlignment: Text.AlignHCenter
-              elide: Text.ElideRight
+              meta: root.timeTracking && root.timeTracking.activeTimer
+                ? String(root.timeTracking.activeTimer.note || "Untitled work")
+                : "Choose a project to begin"
+              detail: root.timeTracking && root.timeTracking.activeTimer
+                ? Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
+                : ""
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              iconOpacity: root.timeTracking && root.timeTracking.activeTimer ? 1 : 0.5
+              iconComponent: Component {
+                Text {
+                  textFormat: Text.PlainText
+                  text: "󰔛"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                }
+              }
             }
             TextField {
               id: noteField
@@ -609,7 +627,7 @@ Panel {
               spacing: Style.space(8)
               ActionButton {
                 cursorIndex: 2
-                selected: root.tab === "timer" && root.keyboardCursor === 2
+                hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 2
                 label: root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: {
@@ -617,8 +635,8 @@ Panel {
                   else root.timeTracking.resume()
                 }
               }
-              ActionButton { cursorIndex: 3; selected: root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
-              ActionButton { cursorIndex: 4; selected: root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
+              ActionButton { cursorIndex: 3; hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
+              ActionButton { cursorIndex: 4; hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
             }
             Text {
               visible: root.timeTracking && root.timeTracking.lastError !== ""
@@ -663,15 +681,33 @@ Panel {
                 spacing: Style.space(4)
                 Repeater {
                   model: root.projectShortcuts
-                  Rectangle {
+                  CursorSurface {
                     required property var modelData
                     required property int index
                     width: projectColumn.width
                     height: Style.space(58)
-                    radius: Style.cornerRadius
-                    color: projectMouse.containsMouse || root.keyboardCursor === index ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
-                    border.width: root.keyboardCursor === index ? 1 : 0
-                    border.color: Color.accent
+                    hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === index
+                    current: root.timeTracking && root.timeTracking.activeTimer
+                      && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
+                      && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
+                    foreground: root.foreground
+                    accent: Color.accent
+                    MouseArea {
+                      id: projectMouse
+                      anchors.left: parent.left
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      anchors.right: projectAction.left
+                      hoverEnabled: true
+                      enabled: root.canMutate
+                      cursorShape: Qt.PointingHandCursor
+                      onContainsMouseChanged: {
+                        if (!containsMouse) return
+                        root.cursorActive = true
+                        root.keyboardCursor = index
+                      }
+                      onClicked: root.startShortcut(modelData)
+                    }
                     Column {
                       anchors.left: parent.left
                       anchors.right: projectAction.left
@@ -698,8 +734,28 @@ Panel {
                         font.pixelSize: Style.font.bodySmall
                       }
                     }
-                    Text { id: projectAction; anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
-                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; enabled: root.canMutate; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) root.keyboardCursor = index; onClicked: root.startShortcut(modelData) }
+                    PanelActionButton {
+                      id: projectAction
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      iconText: root.timeTracking && root.timeTracking.activeTimer
+                        && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
+                        && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
+                        && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊"
+                      tooltipText: iconText === "󰏤" ? "Pause timer" : "Start timer"
+                      foreground: Color.accent
+                      hoverColor: Color.accent
+                      fontFamily: root.fontFamily
+                      fontSize: Style.font.title
+                      enabled: root.canMutate
+                      onHovered: function(h) {
+                        if (!h) return
+                        root.cursorActive = true
+                        root.keyboardCursor = index
+                      }
+                      onClicked: root.startShortcut(modelData)
+                    }
                   }
                 }
               }
@@ -719,12 +775,37 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               elide: Text.ElideRight
             }
-            Row {
-              anchors.horizontalCenter: parent.horizontalCenter
-              spacing: Style.space(16)
-              ActionButton { label: "‹"; onTriggered: root.moveMonth(-1) }
-              Text { anchors.verticalCenter: parent.verticalCenter; text: Qt.formatDate(new Date(root.viewYear, root.viewMonth - 1, 1), "MMMM yyyy"); color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              ActionButton { label: "›"; onTriggered: root.moveMonth(1) }
+            Item {
+              width: parent.width
+              height: Math.max(monthLabel.implicitHeight, previousMonthButton.implicitHeight, nextMonthButton.implicitHeight)
+              PanelActionButton {
+                id: previousMonthButton
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰅁"
+                tooltipText: "Previous month"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.moveMonth(-1)
+              }
+              Text {
+                id: monthLabel
+                anchors.centerIn: parent
+                text: Qt.formatDate(new Date(root.viewYear, root.viewMonth - 1, 1), "MMMM yyyy")
+                color: root.foreground
+                font.family: root.fontFamily
+                font.bold: true
+              }
+              PanelActionButton {
+                id: nextMonthButton
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰅂"
+                tooltipText: "Next month"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.moveMonth(1)
+              }
             }
             Grid {
               id: calendarGrid
@@ -733,14 +814,15 @@ Panel {
               spacing: Style.space(3)
               Repeater {
                 model: root.monthCells
-                Rectangle {
+                CursorSurface {
                   required property var modelData
                   width: (calendarGrid.width - calendarGrid.spacing * 6) / 7
                   height: Style.space(45)
-                  radius: Style.cornerRadius
-                  color: root.selectedDateKey === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, modelData.inMonth ? 0.07 : 0.025)
-                  border.width: root.calendarCursorDateKey === modelData.key ? 2 : (root.todayDateKey === modelData.key ? 1 : 0)
-                  border.color: root.calendarCursorDateKey === modelData.key ? root.foreground : Color.accent
+                  hasCursor: root.cursorActive && root.calendarGridFocused && root.calendarCursorDateKey === modelData.key
+                  current: root.selectedDateKey === modelData.key
+                  bordered: root.todayDateKey === modelData.key
+                  foreground: root.foreground
+                  accent: Color.accent
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatHoursMinutes((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0) : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: root.foreground; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
@@ -750,6 +832,7 @@ Panel {
                     cursorShape: Qt.PointingHandCursor
                     onContainsMouseChanged: {
                       if (!containsMouse) return
+                      root.cursorActive = true
                       root.calendarCursorDateKey = modelData.key
                       root.calendarGridFocused = true
                     }
@@ -766,7 +849,7 @@ Panel {
             Row {
               width: parent.width
               Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              ActionButton { id: addEntryButton; cursorIndex: 0; selected: root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; onHovered: root.calendarGridFocused = false; onTriggered: root.beginAddEntry() }
+              ActionButton { id: addEntryButton; cursorIndex: 0; hasCursor: root.cursorActive && root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; calendarListTarget: true; onTriggered: root.beginAddEntry() }
             }
             Flickable {
               visible: root.entryEditorMode === "closed"
@@ -780,22 +863,23 @@ Panel {
                 spacing: Style.space(4)
                 Repeater {
                   model: root.dayEntries
-                  Rectangle {
+                  CursorSurface {
                     required property var modelData
                     required property int index
                     width: entryColumn.width
                     height: Style.space(38)
-                    color: "transparent"
-                    border.width: root.keyboardCursor === index + 1 ? 1 : 0
-                    border.color: Color.accent
-                    Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(100); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
-                    Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
+                    hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index + 1
+                    foreground: root.foreground
+                    accent: Color.accent
+                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
+                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
                     MouseArea {
                       anchors.fill: parent
                       hoverEnabled: true
                       cursorShape: Qt.PointingHandCursor
                       onContainsMouseChanged: {
                         if (!containsMouse) return
+                        root.cursorActive = true
                         root.keyboardCursor = index + 1
                         root.calendarGridFocused = false
                       }
@@ -815,7 +899,7 @@ Panel {
               TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
               TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
               TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
-              Text { text: "Project and service"; color: Qt.darker(root.foreground, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+              PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
               Flickable {
                 width: parent.width
                 height: Style.space(100)
@@ -827,15 +911,30 @@ Panel {
                   spacing: Style.space(3)
                   Repeater {
                     model: Model.projectShortcuts(root.orderedProjects)
-                    Rectangle {
+                    CursorSurface {
+                      id: entryProjectChoice
                       required property var modelData
+                      property bool pointerHot: false
                       width: entryProjectColumn.width
                       height: Style.space(30)
-                      radius: Style.cornerRadius
                       activeFocusOnTab: true
-                      color: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
-                      Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) } }
+                      hasCursor: activeFocus || pointerHot
+                      current: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId)
+                      bordered: true
+                      foreground: root.foreground
+                      accent: Color.accent
+                      Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                      MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onContainsMouseChanged: entryProjectChoice.pointerHot = containsMouse
+                        onClicked: {
+                          root.entryProjectId = String(modelData.projectId)
+                          root.entryServiceId = String(modelData.serviceId)
+                          root.persistEntryDraft(true)
+                        }
+                      }
                       Keys.onReturnPressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
                       Keys.onSpacePressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
                     }
@@ -873,35 +972,29 @@ Panel {
     }
   }
 
-  component ActionButton: Rectangle {
+  component ActionButton: Button {
     id: action
     property string label: ""
-    property bool selected: false
     property int cursorIndex: -1
+    property bool calendarListTarget: false
     signal triggered()
-    signal hovered()
-    activeFocusOnTab: true
-    Keys.onReturnPressed: action.triggered()
-    Keys.onSpacePressed: action.triggered()
-    implicitWidth: Math.max(Style.space(54), actionLabel.implicitWidth + Style.space(20))
-    implicitHeight: Style.space(32)
-    radius: Style.cornerRadius
-    color: actionMouse.containsMouse || selected ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
+
+    text: label
+    bordered: true
+    focusable: true
+    foreground: root.foreground
+    accent: Color.accent
+    fontFamily: root.fontFamily
+    fontSize: Style.font.body
     opacity: enabled ? 1 : 0.45
-    Text { id: actionLabel; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: root.fontFamily }
-    MouseArea {
-      id: actionMouse
-      anchors.fill: parent
-      hoverEnabled: true
-      enabled: action.enabled
-      cursorShape: Qt.PointingHandCursor
-      onContainsMouseChanged: {
-        if (!containsMouse) return
-        if (action.cursorIndex >= 0) root.keyboardCursor = action.cursorIndex
-        action.hovered()
-      }
-      onClicked: action.triggered()
+
+    onHovered: function(h) {
+      if (!h) return
+      root.cursorActive = true
+      if (action.cursorIndex >= 0) root.keyboardCursor = action.cursorIndex
+      if (action.calendarListTarget) root.calendarGridFocused = false
     }
+    onClicked: action.triggered()
   }
 
   Connections {
