@@ -23,8 +23,13 @@ Panel {
   readonly property var monthCells: Model.calendarMonth(viewYear, viewMonth)
   readonly property var dayEntries: timeTracking ? Model.entriesForDay(timeTracking.entries, selectedDateKey) : []
   readonly property var orderedProjects: timeTracking
-    ? Model.searchProjects(Model.recentProjectOrder(timeTracking.projects, timeTracking.entries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : ""), projectSearch)
+    ? Model.recentProjectOrder(timeTracking.projects, timeTracking.entries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
     : []
+  readonly property var projectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), projectSearch)
+  property string editingEntryId: ""
+  property string entryProjectId: ""
+  property string entryServiceId: ""
+  property bool confirmingDelete: false
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -80,6 +85,47 @@ Panel {
     else timeTracking.start(project.id, serviceId, "")
   }
 
+  function startShortcut(shortcut) {
+    if (!timeTracking || !shortcut) return
+    if (timeTracking.activeTimer) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
+    else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
+  }
+
+  function projectById(projectId) {
+    for (var i = 0; timeTracking && i < timeTracking.projects.length; i++)
+      if (String(timeTracking.projects[i].id) === String(projectId)) return timeTracking.projects[i]
+    return null
+  }
+
+  function beginAddEntry() {
+    var project = orderedProjects.length ? orderedProjects[0] : null
+    editingEntryId = "new"
+    entryProjectId = project ? String(project.id) : ""
+    entryServiceId = projectServiceId(project) === null ? "" : String(projectServiceId(project))
+    confirmingDelete = false
+    entryNoteField.text = ""
+    entryDurationField.text = "00:00"
+  }
+
+  function beginEditEntry(entry) {
+    editingEntryId = String(entry.id)
+    entryProjectId = String(entry.projectId !== undefined ? entry.projectId : entry.project_id)
+    entryServiceId = String(entry.serviceId !== undefined ? entry.serviceId : entry.service_id)
+    confirmingDelete = false
+    entryNoteField.text = String(entry.note || "")
+    entryDurationField.text = Model.formatDuration(entry.durationSeconds !== undefined ? entry.durationSeconds : entry.duration || 0)
+  }
+
+  function saveEntry() {
+    var seconds = Model.parseDurationInput(entryDurationField.text)
+    if (seconds === null || entryProjectId === "" || !timeTracking) return
+    var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
+    if (editingEntryId === "new") fields.startedAt = selectedDateKey + "T12:00:00"
+    if (editingEntryId === "new") timeTracking.createEntry(fields)
+    else timeTracking.updateEntry(editingEntryId, fields)
+    editingEntryId = ""
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -132,6 +178,21 @@ Panel {
             visible: root.tab === "timer"
             anchors.fill: parent
             spacing: Style.space(12)
+
+            Column {
+              width: parent.width
+              visible: root.timeTracking && root.timeTracking.timerMode === "multiple" && !root.timeTracking.activeTimer
+              spacing: Style.space(4)
+              Text { text: "Choose the FreshBooks timer to manage"; color: Color.urgent; font.family: root.fontFamily; font.bold: true }
+              Repeater {
+                model: root.timeTracking ? root.timeTracking.timers : []
+                ActionButton {
+                  required property var modelData
+                  label: Model.formatDuration(modelData.elapsedSeconds) + "  " + String(modelData.note || "Untitled timer")
+                  onTriggered: root.timeTracking.selectTimer(modelData.id)
+                }
+              }
+            }
 
             Text {
               width: parent.width
@@ -208,16 +269,16 @@ Panel {
                 width: parent.width
                 spacing: Style.space(4)
                 Repeater {
-                  model: root.orderedProjects
+                  model: root.projectShortcuts
                   Rectangle {
                     required property var modelData
                     width: projectColumn.width
                     height: Style.space(46)
                     radius: Style.cornerRadius
                     color: projectMouse.containsMouse ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
-                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(60); text: String(modelData.clientName || "") + (modelData.clientName ? " · " : "") + String(modelData.title || modelData.name || "Project"); elide: Text.ElideRight; color: root.foreground; font.family: root.fontFamily }
-                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.id) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
-                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.startProject(modelData) }
+                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(60); text: String(modelData.project.clientName || "") + (modelData.project.clientName ? " · " : "") + String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); elide: Text.ElideRight; color: root.foreground; font.family: root.fontFamily }
+                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
+                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.startShortcut(modelData) }
                   }
                 }
               }
@@ -253,8 +314,13 @@ Panel {
                 }
               }
             }
-            Text { text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+            Row {
+              width: parent.width
+              Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+              ActionButton { id: addEntryButton; label: "+ Entry"; onTriggered: root.beginAddEntry() }
+            }
             Flickable {
+              visible: root.editingEntryId === ""
               width: parent.width
               height: parent.height - calendarGrid.height - Style.space(86)
               contentHeight: entryColumn.implicitHeight
@@ -272,6 +338,57 @@ Panel {
                     color: "transparent"
                     Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(100); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
                     Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.beginEditEntry(modelData) }
+                  }
+                }
+              }
+            }
+
+            Column {
+              visible: root.editingEntryId !== ""
+              width: parent.width
+              spacing: Style.space(7)
+              Text { text: root.editingEntryId === "new" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes" }
+              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onAccepted: root.saveEntry() }
+              Text { text: "Project and service"; color: Qt.darker(root.foreground, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+              Flickable {
+                width: parent.width
+                height: Style.space(100)
+                contentHeight: entryProjectColumn.implicitHeight
+                clip: true
+                Column {
+                  id: entryProjectColumn
+                  width: parent.width
+                  spacing: Style.space(3)
+                  Repeater {
+                    model: Model.projectShortcuts(root.orderedProjects)
+                    Rectangle {
+                      required property var modelData
+                      width: entryProjectColumn.width
+                      height: Style.space(30)
+                      radius: Style.cornerRadius
+                      color: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
+                      Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId) } }
+                    }
+                  }
+                }
+              }
+              Row {
+                spacing: Style.space(8)
+                ActionButton { label: "Save"; enabled: Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== ""; onTriggered: root.saveEntry() }
+                ActionButton { label: "Cancel"; onTriggered: { root.editingEntryId = ""; root.confirmingDelete = false } }
+                ActionButton {
+                  visible: root.editingEntryId !== "new"
+                  label: root.confirmingDelete ? "Delete now" : "Delete"
+                  onTriggered: {
+                    if (!root.confirmingDelete) root.confirmingDelete = true
+                    else {
+                      root.timeTracking.deleteEntry(root.editingEntryId)
+                      root.editingEntryId = ""
+                      root.confirmingDelete = false
+                    }
                   }
                 }
               }

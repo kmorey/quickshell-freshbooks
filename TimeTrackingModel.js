@@ -194,6 +194,36 @@ function searchProjects(projects, query) {
   })
 }
 
+function projectShortcuts(projects) {
+  var result = []
+  var values = asArray(projects)
+  for (var i = 0; i < values.length; i++) {
+    var project = values[i] || {}
+    var services = asArray(project.services)
+    if (services.length === 0) {
+      result.push({ project: project, projectId: project.id, serviceId: null, serviceName: "" })
+      continue
+    }
+    for (var j = 0; j < services.length; j++) {
+      result.push({
+        project: project,
+        projectId: project.id,
+        serviceId: services[j].id,
+        serviceName: String(services[j].name || "")
+      })
+    }
+  }
+  return result
+}
+
+function searchShortcuts(shortcuts, query) {
+  var needle = String(query || "").trim().toLowerCase()
+  if (needle === "") return asArray(shortcuts).slice()
+  return asArray(shortcuts).filter(function(shortcut) {
+    return (projectLabel(shortcut.project) + "\n" + String(shortcut.serviceName || "")).toLowerCase().indexOf(needle) !== -1
+  })
+}
+
 function activeProject(project) {
   if (!project) return false
   return project.active !== false && project.complete !== true && project.archived !== true
@@ -243,10 +273,12 @@ if (typeof module !== "undefined") module.exports = {
   entryDateKey: entryDateKey,
   formatDuration: formatDuration,
   parseDurationInput: parseDurationInput,
+  projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
   searchProjects: searchProjects,
+  searchShortcuts: searchShortcuts,
   reportingWeekTotal: reportingWeekTotal,
   selectedTimer: selectedTimer,
   stateProjection: stateProjection,

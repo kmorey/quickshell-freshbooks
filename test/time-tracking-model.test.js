@@ -89,6 +89,13 @@ test('filters projects and orders one day of entries chronologically', () => {
   assert.deepEqual(model.entriesForDay(entries, '2026-09-02').map(entry => entry.id), [1, 2])
 })
 
+test('expands project services into explicit quick-start choices', () => {
+  const project = { id: 4, title: 'Build', clientName: 'Acme', services: [{ id: 7, name: 'Design' }, { id: 8, name: 'Development' }] }
+  const shortcuts = model.projectShortcuts([project])
+  assert.deepEqual(shortcuts.map(item => [item.projectId, item.serviceId]), [[4, 7], [4, 8]])
+  assert.deepEqual(model.searchShortcuts(shortcuts, 'development'), [shortcuts[1]])
+})
+
 test('orders Project Shortcuts by selected Active Timer then FreshBooks recency', () => {
   const projects = [
     { id: 1, title: 'Alpha', clientName: 'Client', active: true },
