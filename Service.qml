@@ -56,8 +56,11 @@ Item {
   property bool _recentConfirmed: false
   property string _unknownRefreshIntent: ""
   property var _unknownRequest: null
+  property string _unknownRefreshFrom: ""
+  property string _unknownRefreshTo: ""
   property string _unknownOriginalFrom: ""
   property string _unknownOriginalTo: ""
+  property bool _draftFileReady: false
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function diagnosticsCompatible(value) {
@@ -127,6 +130,8 @@ Item {
     outcomeUnknown = false
     _unknownRefreshIntent = ""
     _unknownRequest = null
+    _unknownRefreshFrom = ""
+    _unknownRefreshTo = ""
   }
 
   function refresh() {
@@ -162,6 +167,21 @@ Item {
 
   function refreshDiagnostics() {
     enqueue("refreshDiagnostics", ["diagnostics", "status"], {}, false)
+  }
+
+  function retryUnknownRefresh() {
+    if (!outcomeUnknown) return false
+    if (_unknownRefreshIntent === "refreshEntries") {
+      var argv = ["time", "list"]
+      if (_unknownRefreshFrom !== "") argv.push("--from", _unknownRefreshFrom)
+      if (_unknownRefreshTo !== "") argv.push("--to", _unknownRefreshTo)
+      return enqueueNext("refreshEntries", argv, { fromDate: _unknownRefreshFrom, toDate: _unknownRefreshTo }, false)
+    }
+    if (_unknownRefreshIntent === "refreshTimers") {
+      refresh()
+      return true
+    }
+    return false
   }
 
   function start(projectId, serviceId, note) {
@@ -420,6 +440,7 @@ Item {
     var completed = _current
     var reconcile = false
     var followupCreate = null
+    var followupEntryRead = null
     _current = null
     if (completed.intent === "refreshTimers") _refreshQueued = false
 
@@ -441,9 +462,18 @@ Item {
         _unknownRequest = completed
         _unknownOriginalFrom = lastEntryFrom
         _unknownOriginalTo = lastEntryTo
-        if (_unknownRefreshIntent === "refreshEntries" && completed.intent === "createEntry" && String(completed.payload.localDate || "") !== "")
-          refreshEntries(completed.payload.localDate, completed.payload.localDate)
-        else if (_unknownRefreshIntent === "refreshEntries") refreshEntries(lastEntryFrom, lastEntryTo)
+        if (_unknownRefreshIntent === "refreshEntries") {
+          var recoveryDate = completed.intent === "createEntry" ? String(completed.payload.localDate || "") : ""
+          _unknownRefreshFrom = recoveryDate !== "" ? recoveryDate : lastEntryFrom
+          _unknownRefreshTo = recoveryDate !== "" ? recoveryDate : lastEntryTo
+          var recoveryArgv = ["time", "list"]
+          if (_unknownRefreshFrom !== "") recoveryArgv.push("--from", _unknownRefreshFrom)
+          if (_unknownRefreshTo !== "") recoveryArgv.push("--to", _unknownRefreshTo)
+          followupEntryRead = {
+            argv: recoveryArgv,
+            payload: { fromDate: _unknownRefreshFrom, toDate: _unknownRefreshTo }
+          }
+        }
         else refresh()
       }
       if (error.outcomeUnknown === true) {
@@ -495,16 +525,29 @@ Item {
         }
       }
       else if (completed.intent === "refreshEntries") {
-        if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries") reconcileUnknownEntry(data)
+        var isRecoveryRead = outcomeUnknown && _unknownRefreshIntent === "refreshEntries"
+          && String(completed.payload.fromDate || "") === _unknownRefreshFrom
+          && String(completed.payload.toDate || "") === _unknownRefreshTo
+        if (isRecoveryRead) reconcileUnknownEntry(data)
         adoptEntryData(data)
-        if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries" && !conflictPending) {
+        if (isRecoveryRead && !conflictPending) {
+          var restoreFrom = _unknownOriginalFrom
+          var restoreTo = _unknownOriginalTo
+          var recoveryFrom = _unknownRefreshFrom
+          var recoveryTo = _unknownRefreshTo
           outcomeUnknown = false
           _unknownRefreshIntent = ""
           _unknownRequest = null
-          if (_unknownOriginalFrom !== lastEntryFrom || _unknownOriginalTo !== lastEntryTo) {
-            lastEntryFrom = _unknownOriginalFrom
-            lastEntryTo = _unknownOriginalTo
-            refreshEntries(lastEntryFrom, lastEntryTo)
+          _unknownRefreshFrom = ""
+          _unknownRefreshTo = ""
+          if (restoreFrom !== recoveryFrom || restoreTo !== recoveryTo) {
+            var restoreArgv = ["time", "list"]
+            if (restoreFrom !== "") restoreArgv.push("--from", restoreFrom)
+            if (restoreTo !== "") restoreArgv.push("--to", restoreTo)
+            followupEntryRead = {
+              argv: restoreArgv,
+              payload: { fromDate: restoreFrom, toDate: restoreTo }
+            }
           }
           _unknownOriginalFrom = ""
           _unknownOriginalTo = ""
@@ -524,7 +567,8 @@ Item {
     // Mutation responses are authoritative, but their exact normalized shape
     // belongs to the CLI contract. Reconcile the whole timer set before the
     // next view treats it as current.
-    if (followupCreate) enqueueNext("createEntry", followupCreate.argv, followupCreate.payload, true)
+    if (followupEntryRead) enqueueNext("refreshEntries", followupEntryRead.argv, followupEntryRead.payload, false)
+    else if (followupCreate) enqueueNext("createEntry", followupCreate.argv, followupCreate.payload, true)
     else if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
     else pump()
   }
@@ -542,16 +586,30 @@ Item {
     path: Quickshell.statePath("kmorey.freshbooks-time-drafts.json")
     atomicWrites: true
     printErrors: false
-    onAdapterUpdated: writeAdapter()
+    onAdapterUpdated: if (root._draftFileReady) writeAdapter()
     onLoaded: {
-      if (stateData.schemaVersion !== 2) {
-        draftBackup.setText(text())
-        stateData.schemaVersion = 2
-        root.clearTimerDraft()
-        root.clearEntryDraft()
+      var rawDraft = String(text() || "")
+      var parsedDraft = null
+      var parsedSuccessfully = true
+      try {
+        parsedDraft = JSON.parse(rawDraft)
+      } catch (error) {
+        parsedSuccessfully = false
+      }
+      if (!parsedSuccessfully || !parsedDraft || typeof parsedDraft !== "object" || Array.isArray(parsedDraft) || parsedDraft.schemaVersion !== 2) {
+        root.preserveAndResetDraft(rawDraft)
+      } else {
+        root._draftFileReady = true
       }
     }
-    onLoadFailed: if (String(text() || "") !== "") draftBackup.setText(text())
+    onLoadFailed: {
+      var rawDraft = String(text() || "")
+      if (rawDraft !== "") {
+        root.preserveAndResetDraft(rawDraft)
+      } else {
+        root._draftFileReady = true
+      }
+    }
 
     JsonAdapter {
       id: stateData
@@ -564,6 +622,18 @@ Item {
       property bool timerDurationDirty: false
       property var entryDraft: ({})
     }
+  }
+
+  function preserveAndResetDraft(rawDraft) {
+    draftBackup.setText(String(rawDraft || ""))
+    _draftFileReady = false
+    if (stateData.schemaVersion !== 2) {
+      stateData.schemaVersion = 2
+    }
+    clearTimerDraft()
+    clearEntryDraft()
+    _draftFileReady = true
+    draftFile.writeAdapter()
   }
 
   FileView {

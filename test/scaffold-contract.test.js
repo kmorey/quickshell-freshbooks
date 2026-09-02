@@ -71,7 +71,11 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /refreshDiagnostics/)
   assert.match(service, /prepareCreateEntry/)
   assert.match(service, /knownEntryDate/)
+  assert.match(service, /_unknownRefreshFrom/)
+  assert.match(service, /function retryUnknownRefresh/)
   assert.match(service, /freshbooks-time-drafts\.incompatible\.json/)
+  assert.match(service, /JSON\.parse\(rawDraft\)/)
+  assert.match(service, /_draftFileReady\) writeAdapter/)
   assert.doesNotMatch(service, /Qt\.resolvedUrl\([^)]*draft/i)
 })
 

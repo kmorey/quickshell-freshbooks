@@ -56,6 +56,7 @@ Panel {
 
   function refresh() {
     if (!timeTracking) return
+    if (timeTracking.outcomeUnknown && timeTracking.retryUnknownRefresh()) return
     var cells = monthCells
     timeTracking.refreshAll(cells.length ? cells[0].key : "", cells.length ? cells[cells.length - 1].key : "")
   }
