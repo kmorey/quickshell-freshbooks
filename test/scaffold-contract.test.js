@@ -14,6 +14,7 @@ test('declares one installable service plus bar-widget plugin', () => {
   assert.equal(manifest.entryPoints.service, 'Service.qml')
   assert.equal(manifest.entryPoints.barWidget, 'BarWidget.qml')
   assert.equal(manifest.barWidget.allowMultiple, false)
+  assert.equal(manifest.barWidget.defaultSection, 'right')
 })
 
 test('uses the generic third-party service lookup compatibility seam', () => {
@@ -24,6 +25,7 @@ test('uses the generic third-party service lookup compatibility seam', () => {
   assert.match(widget, /ServiceAccess\.serviceFor/)
   assert.match(widget, /openCalendar/)
   assert.match(widget, /boundedStatus/)
+  assert.match(widget, /panelLoaded:/)
   assert.doesNotMatch(widget, /activeTimer\.note/)
 })
 

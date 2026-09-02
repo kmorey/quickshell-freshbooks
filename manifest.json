@@ -19,6 +19,6 @@
     "description": "FreshBooks-backed time tracking",
     "category": "Time",
     "allowMultiple": false,
-    "defaultSection": "center"
+    "defaultSection": "right"
   }
 }

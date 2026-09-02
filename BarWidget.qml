@@ -37,6 +37,8 @@ BarWidget {
     return JSON.stringify({
       ready: root.timeTracking ? root.timeTracking.diagnosticsReady === true : false,
       opened: root.opened,
+      panelLoaded: panelLoader.status === Loader.Ready,
+      panelStatus: panelLoader.status,
       timerMode: root.timerMode,
       running: root.activeTimer ? root.activeTimer.running === true : false,
       busy: root.timeTracking ? root.timeTracking.busy === true : false,
