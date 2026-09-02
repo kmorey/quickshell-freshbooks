@@ -15,9 +15,9 @@ BarWidget {
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
   readonly property string iconGlyph: "󰔛"
   readonly property string label: {
-    if (!timeTracking) return "FreshBooks"
+    if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"
-    if (!activeTimer) return "FreshBooks"
+    if (!activeTimer) return ""
     return Model.formatDuration(Model.elapsedSeconds(activeTimer, clock.date.getTime()))
   }
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
@@ -90,12 +90,12 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical ? "" : root.iconGlyph + "  " + root.label
+    text: root.vertical ? "" : root.iconGlyph + (root.label === "" ? "" : "  " + root.label)
     labelVisible: !root.vertical
     hasVisualContent: root.vertical || text !== ""
     tooltipText: root.timerMode === "multiple"
       ? "FreshBooks has multiple unlogged timers"
-      : "Refresh FreshBooks time tracking"
+      : "FreshBooks Time"
     horizontalMargin: 8.75
     verticalPadding: 8.75
     onPressed: function() {

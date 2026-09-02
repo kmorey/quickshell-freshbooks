@@ -313,7 +313,7 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    centerOnBar: false
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(root.tab === "calendar" ? 620 : 460))
     contentHeight: panel.fittedContentHeight(Style.space(560))

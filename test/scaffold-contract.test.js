@@ -26,6 +26,8 @@ test('uses the generic third-party service lookup compatibility seam', () => {
   assert.match(widget, /openCalendar/)
   assert.match(widget, /boundedStatus/)
   assert.match(widget, /panelLoaded:/)
+  assert.match(widget, /if \(!activeTimer\) return ""/)
+  assert.doesNotMatch(widget, /return "FreshBooks"/)
   assert.doesNotMatch(widget, /activeTimer\.note/)
 })
 
@@ -98,6 +100,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   const panel = fs.readFileSync(path.join(root, 'Panel.qml'), 'utf8')
   for (const tab of ['timer', 'projects', 'calendar']) assert.match(panel, new RegExp(`"${tab}"`))
   assert.match(panel, /KeyboardPanel/)
+  assert.match(panel, /centerOnBar:\s*false/)
   assert.match(panel, /parseDurationInput/)
   assert.match(panel, /reportingWeekTotal/)
   assert.match(panel, /switchTimer/)
