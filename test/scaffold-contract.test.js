@@ -43,6 +43,10 @@ test('keeps FreshBooks invocation as an argv array with no command shell', () =>
   assert.match(adapter, /CLI_RECORD_SCHEMA_MISMATCH/)
   assert.match(adapter, /maxResponseBytes: 1048576/)
   assert.match(adapter, /schemaVersion !== 1/)
+  assert.match(adapter, /onExited:\s*function\(exitCode, exitStatus\)[\s\S]{0,400}Qt\.callLater/)
+  assert.match(adapter, /stdinEnabled:\s*true/)
+  assert.match(adapter, /onStarted:[\s\S]*activeRequest\.stdin/)
+  assert.doesNotMatch(adapter, /concat\([^\n]*stdin/)
 })
 
 test('imports Quickshell.Io wherever IO types are instantiated', () => {
@@ -68,7 +72,11 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
     'switchTimer',
     'createEntry',
     'updateEntry',
-    'deleteEntry'
+    'deleteEntry',
+    'configureAuth',
+    'requestAuthorizationUrl',
+    'completeAuthentication',
+    'selectBusiness'
   ]) assert.match(service, new RegExp(`function ${intent}\\(`))
   assert.match(service, /property var cliAdapter: productionCli/)
   assert.match(service, /function useAdapter\(adapter\)/)
@@ -83,6 +91,9 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /--limit", "200/)
   assert.match(service, /Quickshell\.cachePath\("kmorey\.freshbooks-time-cache\.json"\)/)
   assert.match(service, /refreshDiagnostics/)
+  assert.match(service, /property var businesses:/)
+  assert.match(service, /property string authorizationUrl:/)
+  assert.match(service, /popup-onboarding/)
   assert.match(service, /prepareCreateEntry/)
   assert.match(service, /knownEntryDate/)
   assert.match(service, /_unknownRefreshFrom/)
@@ -126,4 +137,8 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   const durationEditor = panel.slice(panel.indexOf('id: durationField'), panel.indexOf('Row {', panel.indexOf('id: durationField')))
   assert.doesNotMatch(durationEditor, /onAccepted:/)
   assert.match(panel, /draftTimerDurationDirty/)
+  assert.match(panel, /Set up FreshBooks/)
+  assert.match(panel, /Client secret/)
+  assert.match(panel, /Open FreshBooks authorization/)
+  assert.match(panel, /Choose a business/)
 })

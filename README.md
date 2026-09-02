@@ -7,6 +7,7 @@ The popup provides:
 - a live Timer tab with notes, explicit duration correction, pause/resume, and log
 - a Projects tab ordered by the active and most recently used projects, with one-click safe switching
 - a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists
+- guided OAuth and business selection when FreshBooks has not been configured yet
 
 Timer and entry drafts are compared against FreshBooks snapshot tokens. If the browser or another client changes a dirty record, the panel offers **Reload** or **Apply mine** instead of silently overwriting it. Timed-out mutations are reconciled with a refresh before retry is enabled.
 
@@ -22,15 +23,15 @@ During development, the required CLI contract is tracked in [freshbooks-cli PR #
 
 ## Install
 
-After installing and authenticating `freshbooks-cli` in a terminal:
+After installing `freshbooks-cli`:
 
 ```bash
 omarchy plugin add https://github.com/kmorey/quickshell-freshbooks --enable
 ```
 
-Add the **FreshBooks Time** widget to the bar through Omarchy's bar settings. Click the bar timer to open the panel.
+Add the **FreshBooks Time** widget to the bar through Omarchy's bar settings. Click the bar timer to open the panel. If FreshBooks is not configured, the popup walks through OAuth application credentials, browser authorization, and business selection without requiring a separate terminal.
 
-Authentication and OAuth credentials remain owned by `freshbooks-cli`. This plugin never reads the keyring, stores tokens, or writes runtime data into its installed checkout. Unsubmitted editor drafts are atomically stored in Quickshell's per-shell state directory and removed after a confirmed save.
+Authentication and OAuth credentials remain owned by `freshbooks-cli`. Setup secrets and authorization callbacks are sent to the CLI over stdin and cleared from popup fields immediately; this plugin never reads the keyring, stores tokens, or writes runtime data into its installed checkout. Unsubmitted editor drafts are atomically stored in Quickshell's per-shell state directory and removed after a confirmed save.
 
 ## Development
 

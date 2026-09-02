@@ -28,6 +28,8 @@ Item {
   property var entries: []
   property var recentEntries: []
   property var diagnostics: ({})
+  property var businesses: []
+  property string authorizationUrl: ""
   property string selectedTimerId: ""
   property string phase: "starting"
   property string lastErrorCode: ""
@@ -63,6 +65,7 @@ Item {
   property string _unknownOriginalTo: ""
   property bool _draftFileReady: false
   property bool _draftResetPending: false
+  property bool _fullRefreshRequested: false
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function diagnosticsCompatible(value) {
@@ -70,7 +73,7 @@ Item {
     var parts = String(data.version || "").split(".")
     if (Number(parts[0] || 0) !== 0 || Number(parts[1] || 0) < 2) return false
     if (!Array.isArray(data.capabilities)) return false
-    var required = ["projects", "time-entries", "timer-segments", "timer-switch", "snapshot-guards", "local-calendar", "bounded-history"]
+    var required = ["projects", "time-entries", "timer-segments", "timer-switch", "snapshot-guards", "local-calendar", "bounded-history", "popup-onboarding"]
     for (var i = 0; i < required.length; i++) if (data.capabilities.indexOf(required[i]) === -1) return false
     return true
   }
@@ -90,6 +93,13 @@ Item {
   function clearTimerDurationDraft() {
     stateData.timerDuration = ""
     stateData.timerDurationDirty = false
+  }
+
+  function setupReady() {
+    return diagnosticsReady
+      && diagnostics.configured === true
+      && diagnostics.authenticated === true
+      && diagnostics.businessSelected === true
   }
 
   function withSnapshot(argv, record) {
@@ -137,6 +147,7 @@ Item {
   }
 
   function refresh() {
+    if (!setupReady()) return
     if (_refreshQueued || (_current && _current.intent === "refreshTimers")) return
     _refreshQueued = true
     enqueue("refreshTimers", ["timer", "status"], {}, false)
@@ -160,15 +171,54 @@ Item {
   }
 
   function refreshAll(fromDate, toDate) {
+    lastEntryFrom = String(fromDate || lastEntryFrom || "")
+    lastEntryTo = String(toDate || lastEntryTo || "")
+    _fullRefreshRequested = true
     refreshDiagnostics()
+    if (!setupReady()) return
+    _fullRefreshRequested = false
+    refreshOperationalData()
+  }
+
+  function refreshOperationalData() {
     refresh()
     refreshProjects()
     refreshRecentEntries()
-    refreshEntries(fromDate, toDate)
+    refreshEntries(lastEntryFrom, lastEntryTo)
   }
 
   function refreshDiagnostics() {
     enqueue("refreshDiagnostics", ["diagnostics", "status"], {}, false)
+  }
+
+  function configureAuth(clientId, clientSecret, redirectUri) {
+    if (String(clientId || "") === "" || String(clientSecret || "") === "" || String(redirectUri || "") === "") return false
+    authorizationUrl = ""
+    return enqueue("configureAuth", [
+      "auth", "configure",
+      "--client-id", String(clientId),
+      "--redirect-uri", String(redirectUri),
+      "--client-secret-stdin"
+    ], {}, false, String(clientSecret))
+  }
+
+  function requestAuthorizationUrl() {
+    authorizationUrl = ""
+    return enqueue("requestAuthorizationUrl", ["auth", "url"], {}, false)
+  }
+
+  function completeAuthentication(codeOrUrl) {
+    if (String(codeOrUrl || "") === "") return false
+    return enqueue("completeAuthentication", ["auth", "login", "--code-stdin"], {}, false, String(codeOrUrl))
+  }
+
+  function refreshBusinesses() {
+    return enqueue("refreshBusinesses", ["business", "list"], {}, false)
+  }
+
+  function selectBusiness(businessId) {
+    if (String(businessId || "") === "") return false
+    return enqueue("selectBusiness", ["business", "use", String(businessId)], {}, false)
   }
 
   function retryUnknownRefresh() {
@@ -269,7 +319,7 @@ Item {
     enqueue("deleteEntry", argv, { entryId: entryId }, true)
   }
 
-  function enqueue(intent, argv, payload, mutation) {
+  function enqueue(intent, argv, payload, mutation, stdin) {
     if (mutation === true && (outcomeUnknown || conflictPending)) return false
     _requestSerial += 1
     var next = _queue.slice()
@@ -278,7 +328,8 @@ Item {
       intent: intent,
       argv: argv.slice(),
       payload: payload || {},
-      mutation: mutation === true
+      mutation: mutation === true,
+      stdin: stdin === undefined ? undefined : String(stdin)
     })
     _queue = next
     pump()
@@ -346,6 +397,7 @@ Item {
     _queue = next
     phase = _current.mutation ? "mutating" : "refreshing"
     cliAdapter.execute(_current.id, _current)
+    if (_current.stdin !== undefined) _current.stdin = ""
   }
 
   function adoptTimerData(data) {
@@ -512,7 +564,39 @@ Item {
         })
         cacheData.recentEntries = recentCache
       }
-      else if (completed.intent === "refreshDiagnostics") diagnostics = data || ({})
+      else if (completed.intent === "refreshDiagnostics") {
+        diagnostics = data || ({})
+        if (!conflictPending && !outcomeUnknown) clearError()
+        if (diagnosticsReady && diagnostics.authenticated === true && diagnostics.businessSelected !== true)
+          refreshBusinesses()
+        else if (setupReady() && _fullRefreshRequested) {
+          _fullRefreshRequested = false
+          refreshOperationalData()
+        }
+      }
+      else if (completed.intent === "configureAuth") {
+        clearError()
+        refreshDiagnostics()
+        requestAuthorizationUrl()
+      }
+      else if (completed.intent === "requestAuthorizationUrl") {
+        clearError()
+        authorizationUrl = String((data || {}).url || "")
+      }
+      else if (completed.intent === "completeAuthentication") {
+        clearError()
+        authorizationUrl = ""
+        refreshDiagnostics()
+      }
+      else if (completed.intent === "refreshBusinesses") {
+        clearError()
+        businesses = Array.isArray(data) ? data : []
+      }
+      else if (completed.intent === "selectBusiness") {
+        clearError()
+        businesses = []
+        refreshDiagnostics()
+      }
       else if (completed.intent === "prepareCreateEntry") {
         var createPayload = {}
         for (var createKey in completed.payload) createPayload[createKey] = completed.payload[createKey]
@@ -699,6 +783,5 @@ Item {
 
   Component.onCompleted: {
     refreshDiagnostics()
-    refresh()
   }
 }

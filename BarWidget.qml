@@ -43,6 +43,7 @@ BarWidget {
       running: root.activeTimer ? root.activeTimer.running === true : false,
       busy: root.timeTracking ? root.timeTracking.busy === true : false,
       cliVersion: root.timeTracking ? String((root.timeTracking.diagnostics || {}).version || "") : "",
+      configured: root.timeTracking ? (root.timeTracking.diagnostics || {}).configured === true : false,
       authenticated: root.timeTracking ? (root.timeTracking.diagnostics || {}).authenticated === true : false,
       businessSelected: root.timeTracking ? (root.timeTracking.diagnostics || {}).businessSelected === true : false,
       lastErrorCode: root.timeTracking ? String(root.timeTracking.lastErrorCode || "") : "SERVICE_UNAVAILABLE"

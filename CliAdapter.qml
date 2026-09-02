@@ -9,6 +9,7 @@ Item {
   property int maxResponseBytes: 1048576
   property string activeRequestId: ""
   property var activeRequest: null
+  property string pendingStdin: ""
   property string stdoutText: ""
   property string stderrText: ""
   property bool timedOut: false
@@ -26,6 +27,7 @@ Item {
     var argv = request && Array.isArray(request.argv) ? request.argv.slice() : []
     activeRequestId = String(requestId)
     activeRequest = request
+    pendingStdin = request && request.stdin !== undefined ? String(request.stdin) : ""
     stdoutText = ""
     stderrText = ""
     timedOut = false
@@ -38,6 +40,7 @@ Item {
   function cancel() {
     if (!cliProcess.running) return
     timedOut = true
+    pendingStdin = ""
     cliProcess.running = false
   }
 
@@ -87,10 +90,23 @@ Item {
       for (var k = 0; k < data.length; k++)
         if (!validEntry(data[k])) return false
     } else if (intent === "refreshDiagnostics") {
-      return validRecord(data, ["version", "authenticated", "businessSelected", "capabilities", "localDate"])
-        && typeof data.version === "string" && typeof data.authenticated === "boolean"
+      return validRecord(data, ["version", "configured", "authenticated", "businessSelected", "capabilities", "localDate"])
+        && typeof data.version === "string" && typeof data.configured === "boolean" && typeof data.authenticated === "boolean"
         && typeof data.businessSelected === "boolean" && Array.isArray(data.capabilities)
         && /^\d{4}-\d{2}-\d{2}$/.test(data.localDate)
+    } else if (intent === "configureAuth") {
+      return validRecord(data, ["configured"]) && data.configured === true
+    } else if (intent === "requestAuthorizationUrl") {
+      return validRecord(data, ["url"]) && typeof data.url === "string" && /^https:\/\//.test(data.url)
+    } else if (intent === "completeAuthentication") {
+      return validRecord(data, ["authenticated"]) && data.authenticated === true
+    } else if (intent === "refreshBusinesses") {
+      if (!Array.isArray(data)) return false
+      for (var businessIndex = 0; businessIndex < data.length; businessIndex++)
+        if (!validRecord(data[businessIndex], ["id", "name"]) || !validId(data[businessIndex].id)
+            || typeof data[businessIndex].name !== "string") return false
+    } else if (intent === "selectBusiness") {
+      return validRecord(data, ["id", "name"]) && validId(data.id) && typeof data.name === "string"
     } else if (["start", "pause", "resume", "correctDuration", "updateTimerNote"].indexOf(intent) !== -1) {
       return validTimer(data)
     } else if (intent === "log") {
@@ -181,7 +197,13 @@ Item {
   Process {
     id: cliProcess
     running: false
+    stdinEnabled: true
     command: []
+    onStarted: {
+      if (root.activeRequest && root.activeRequest.stdin !== undefined)
+        write(root.pendingStdin + "\n")
+      root.pendingStdin = ""
+    }
     stdout: StdioCollector {
       id: stdoutCollector
       waitForEnd: true
@@ -194,6 +216,11 @@ Item {
       onStreamFinished: root.stderrText = text
       onTextChanged: if (text.length > root.maxResponseBytes) root.cancelOversized()
     }
-    onExited: function(exitCode, exitStatus) { root.finish(exitCode, exitStatus) }
+    onExited: function(exitCode, exitStatus) {
+      // Process.running can remain true until the exit signal returns. Finish
+      // on the next event-loop turn so the service may safely start its next
+      // queued request without receiving a false ADAPTER_BUSY failure.
+      Qt.callLater(function() { root.finish(exitCode, exitStatus) })
+    }
   }
 }

@@ -31,6 +31,11 @@ Panel {
     ? Model.recentProjectOrder(timeTracking.projects, timeTracking.recentEntries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
     : []
   readonly property var projectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), projectSearch)
+  readonly property var setupDiagnostics: timeTracking ? (timeTracking.diagnostics || {}) : ({})
+  readonly property bool setupRequired: !timeTracking || !timeTracking.diagnosticsReady
+    || setupDiagnostics.configured !== true
+    || setupDiagnostics.authenticated !== true
+    || setupDiagnostics.businessSelected !== true
   property string entryEditorMode: "closed"
   property string editingEntryId: ""
   property string entryProjectId: ""
@@ -52,6 +57,29 @@ Panel {
 
   function localDateKey(date) {
     return Model.dateKey(date.getFullYear(), date.getMonth() + 1, date.getDate())
+  }
+
+  function saveAuthConfiguration() {
+    if (!timeTracking) return
+    var secret = clientSecretField.text
+    clientSecretField.text = ""
+    timeTracking.configureAuth(clientIdField.text, secret, redirectUriField.text)
+  }
+
+  function openAuthorizationPage() {
+    if (!timeTracking) return
+    if (String(timeTracking.authorizationUrl || "") === "") {
+      timeTracking.requestAuthorizationUrl()
+      return
+    }
+    Qt.openUrlExternally(String(timeTracking.authorizationUrl))
+  }
+
+  function finishAuthentication() {
+    if (!timeTracking) return
+    var codeOrUrl = authorizationCodeField.text
+    authorizationCodeField.text = ""
+    timeTracking.completeAuthentication(codeOrUrl)
   }
 
   function refresh() {
@@ -321,34 +349,162 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: noteField.activeFocus || durationField.activeFocus || searchField.activeFocus || root.entryEditorMode !== "closed"
+      blocked: clientIdField.activeFocus || clientSecretField.activeFocus || redirectUriField.activeFocus
+        || authorizationCodeField.activeFocus || noteField.activeFocus || durationField.activeFocus
+        || searchField.activeFocus || root.entryEditorMode !== "closed"
       onCloseRequested: root.close()
-      onMoveRequested: function(dx, dy) { root.moveKeyboardCursor(dx, dy) }
-      onActivateRequested: root.activateKeyboardCursor()
-      onDeleteRequested: root.deleteKeyboardSelection()
-      onTextKey: function(text) { if (root.tab === "calendar" && (text === "g" || text === "G")) root.calendarGridFocused = true }
+      onMoveRequested: function(dx, dy) { if (!root.setupRequired) root.moveKeyboardCursor(dx, dy) }
+      onActivateRequested: if (!root.setupRequired) root.activateKeyboardCursor()
+      onDeleteRequested: if (!root.setupRequired) root.deleteKeyboardSelection()
+      onTextKey: function(text) { if (!root.setupRequired && root.tab === "calendar" && (text === "g" || text === "G")) root.calendarGridFocused = true }
       onTabRequested: function(direction) {
-        root.switchTab(direction)
+        if (!root.setupRequired) root.switchTab(direction)
       }
 
       Column {
         anchors.fill: parent
         spacing: Style.space(10)
 
-        Text {
-          visible: root.timeTracking && (!root.timeTracking.diagnosticsReady || (root.timeTracking.diagnostics || {}).authenticated !== true || (root.timeTracking.diagnostics || {}).businessSelected !== true)
+        Column {
+          visible: root.setupRequired
           width: parent.width
-          wrapMode: Text.Wrap
-          text: root.timeTracking && !root.timeTracking.diagnosticsReady
-            ? "freshbooks-cli 0.2.0+ is missing or incompatible. Install/update it in a terminal, then refresh."
-            : ((root.timeTracking.diagnostics || {}).authenticated !== true
-                ? "FreshBooks setup required. Run `freshbooks auth login` in a terminal."
-                : "Choose an account in a terminal with `freshbooks business use ID`.")
-          color: Color.urgent
-          font.family: root.fontFamily
+          spacing: Style.space(10)
+
+          Text {
+            width: parent.width
+            text: "Set up FreshBooks"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.title
+            font.bold: true
+            horizontalAlignment: Text.AlignHCenter
+          }
+
+          Column {
+            visible: !root.timeTracking || !root.timeTracking.diagnosticsReady
+            width: parent.width
+            spacing: Style.space(8)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "freshbooks-cli with popup onboarding support is missing or incompatible. Install or update the CLI, then retry."
+              color: Color.urgent
+              font.family: root.fontFamily
+            }
+            ActionButton { label: "Retry"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.timeTracking.refreshDiagnostics() }
+          }
+
+          Column {
+            visible: root.timeTracking && root.timeTracking.diagnosticsReady && root.setupDiagnostics.configured !== true
+            width: parent.width
+            spacing: Style.space(8)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Create a FreshBooks OAuth app, then enter its credentials. The secret is sent directly to the CLI and is not saved by this plugin."
+              color: root.foreground
+              font.family: root.fontFamily
+            }
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Scopes: user:profile:read · user:projects:read · user:clients:read · user:billable_items:read · user:time_entries:read · user:time_entries:write"
+              color: Qt.darker(root.foreground, 1.25)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            ActionButton { label: "Open FreshBooks developer hub"; onTriggered: Qt.openUrlExternally("https://my.freshbooks.com/#/developer") }
+            TextField { id: clientIdField; width: parent.width; placeholderText: "Client ID" }
+            TextField {
+              id: clientSecretField
+              width: parent.width
+              placeholderText: "Client secret"
+              echoMode: TextInput.Password
+              inputMethodHints: Qt.ImhSensitiveData
+            }
+            TextField {
+              id: redirectUriField
+              width: parent.width
+              placeholderText: "HTTPS redirect URI"
+              text: "https://localhost/freshbooks/callback"
+            }
+            ActionButton {
+              label: "Save and continue"
+              enabled: root.timeTracking && !root.timeTracking.busy
+                && clientIdField.text !== "" && clientSecretField.text !== "" && redirectUriField.text !== ""
+              onTriggered: root.saveAuthConfiguration()
+            }
+          }
+
+          Column {
+            visible: root.timeTracking && root.timeTracking.diagnosticsReady
+              && root.setupDiagnostics.configured === true
+              && root.setupDiagnostics.authenticated !== true
+            width: parent.width
+            spacing: Style.space(8)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Authorize the app in FreshBooks. The localhost page may fail to load; copy its complete URL from the browser and paste it below."
+              color: root.foreground
+              font.family: root.fontFamily
+            }
+            ActionButton {
+              label: String(root.timeTracking && root.timeTracking.authorizationUrl || "") === ""
+                ? "Prepare authorization" : "Open FreshBooks authorization"
+              enabled: root.timeTracking && !root.timeTracking.busy
+              onTriggered: root.openAuthorizationPage()
+            }
+            TextField { id: authorizationCodeField; width: parent.width; placeholderText: "Redirect URL or authorization code" }
+            ActionButton {
+              label: "Finish authentication"
+              enabled: root.timeTracking && !root.timeTracking.busy && authorizationCodeField.text !== ""
+              onTriggered: root.finishAuthentication()
+            }
+          }
+
+          Column {
+            visible: root.timeTracking && root.timeTracking.diagnosticsReady
+              && root.setupDiagnostics.authenticated === true
+              && root.setupDiagnostics.businessSelected !== true
+            width: parent.width
+            spacing: Style.space(8)
+            Text { text: "Choose a business"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+            Repeater {
+              model: root.timeTracking ? root.timeTracking.businesses : []
+              ActionButton {
+                required property var modelData
+                label: String(modelData.name || "FreshBooks business")
+                enabled: root.timeTracking && !root.timeTracking.busy
+                onTriggered: root.timeTracking.selectBusiness(modelData.id)
+              }
+            }
+            ActionButton {
+              label: "Refresh businesses"
+              enabled: root.timeTracking && !root.timeTracking.busy
+              onTriggered: root.timeTracking.refreshBusinesses()
+            }
+          }
+
+          Text {
+            visible: root.timeTracking && root.timeTracking.busy
+            width: parent.width
+            text: "Working…"
+            color: Qt.darker(root.foreground, 1.25)
+            font.family: root.fontFamily
+          }
+          Text {
+            visible: root.timeTracking && root.timeTracking.lastError !== ""
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: root.timeTracking ? root.timeTracking.lastError : ""
+            color: Color.urgent
+            font.family: root.fontFamily
+          }
         }
 
         Row {
+          visible: !root.setupRequired
           width: parent.width
           spacing: Style.space(6)
 
@@ -367,6 +523,7 @@ Panel {
         }
 
         Item {
+          visible: !root.setupRequired
           width: parent.width
           height: parent.height - Style.space(44)
 
