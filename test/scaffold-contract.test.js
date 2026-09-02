@@ -76,6 +76,9 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /freshbooks-time-drafts\.incompatible\.json/)
   assert.match(service, /JSON\.parse\(rawDraft\)/)
   assert.match(service, /_draftFileReady\) writeAdapter/)
+  assert.match(service, /onSaved: root\.finishDraftReset/)
+  assert.match(service, /onSaveFailed: function\(error\)/)
+  assert.match(service, /original file was left untouched/)
   assert.doesNotMatch(service, /Qt\.resolvedUrl\([^)]*draft/i)
 })
 

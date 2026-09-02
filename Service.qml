@@ -61,6 +61,7 @@ Item {
   property string _unknownOriginalFrom: ""
   property string _unknownOriginalTo: ""
   property bool _draftFileReady: false
+  property bool _draftResetPending: false
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function diagnosticsCompatible(value) {
@@ -625,8 +626,15 @@ Item {
   }
 
   function preserveAndResetDraft(rawDraft) {
-    draftBackup.setText(String(rawDraft || ""))
+    if (_draftResetPending) return
+    _draftResetPending = true
     _draftFileReady = false
+    draftBackup.setText(String(rawDraft || ""))
+  }
+
+  function finishDraftReset() {
+    if (!_draftResetPending) return
+    _draftResetPending = false
     if (stateData.schemaVersion !== 2) {
       stateData.schemaVersion = 2
     }
@@ -636,11 +644,22 @@ Item {
     draftFile.writeAdapter()
   }
 
+  function failDraftBackup(error) {
+    if (!_draftResetPending) return
+    _draftResetPending = false
+    _draftFileReady = false
+    phase = "error"
+    lastErrorCode = "DRAFT_BACKUP_FAILED"
+    lastError = "Could not preserve the incompatible draft; the original file was left untouched."
+  }
+
   FileView {
     id: draftBackup
     path: Quickshell.statePath("kmorey.freshbooks-time-drafts.incompatible.json")
     atomicWrites: true
     printErrors: false
+    onSaved: root.finishDraftReset()
+    onSaveFailed: function(error) { root.failDraftBackup(error) }
   }
 
   FileView {
