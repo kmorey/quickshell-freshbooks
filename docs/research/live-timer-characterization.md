@@ -46,7 +46,7 @@ Before logging, the web UI fetched `GET /comments/business/<ID>/project/<ID>`. T
 
 Logging then sent `PUT /comments/business/<ID>/timers/<ID>` with a `timer.time_entries` array containing the Time Entry representation to finalize. A follow-up read showed one logged entry, no unlogged entries, and no open segment for the disposable note. This short entry rounded to zero stored seconds, consistent with FreshBooks' nearest-minute timer rounding.
 
-The timer identity and segment set in this log capture did not match the immediately preceding correction capture. Until the interaction sequence is confirmed or reproduced under CLI control, the endpoint and project preflight are evidence for the log contract, but the capture must not be used to infer an identity replacement during logging.
+The correction timer encountered an unresolved FreshBooks web UI save error and was discarded. The log capture came from a newly started disposable timer, which explains its different identity and segment set; FreshBooks did not replace the timer identity during logging. A later controlled CLI lifecycle independently confirmed identity continuity through log.
 
 ## Public Time Entry endpoint limitations
 
@@ -67,7 +67,7 @@ The controlled scripts tracked every created entry and deleted it in `finally`. 
 
 ## Remaining characterization work
 
-Validate the observed start, pause, resume, correction, and log operations with disposable data under CLI control. Reconfirm the project preflight and timer identity continuity during logging. Do not retain or publish cookies, authorization headers, CSRF values, live identifiers, personal data, or full HAR files.
+The observed start, pause, resume, correction, and log operations were validated with disposable data under CLI control, including project preflight and timer identity continuity during logging. Remaining release characterization covers stale-write conflict UX and real wall-clock midnight behavior. Do not retain or publish cookies, authorization headers, CSRF values, live identifiers, personal data, or full HAR files.
 
 ## Primary references
 
