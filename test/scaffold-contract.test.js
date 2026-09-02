@@ -48,6 +48,7 @@ test('imports Quickshell.Io wherever IO types are instantiated', () => {
   assert.match(widget, /^import Quickshell\.Io$/m)
   assert.ok(widget.includes(String.fromCodePoint(0xf051b)))
   assert.ok(!widget.includes(String.fromCodePoint(0xf1442)))
+  assert.match(widget, /hasVisualContent:\s*root\.vertical\s*\|\|\s*text\s*!==\s*""/)
 })
 
 test('exposes one deep intent module and an injectable deterministic adapter', () => {

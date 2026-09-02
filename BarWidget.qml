@@ -90,6 +90,7 @@ BarWidget {
     bar: root.bar
     text: root.vertical ? "" : root.iconGlyph + "  " + root.label
     labelVisible: !root.vertical
+    hasVisualContent: root.vertical || text !== ""
     tooltipText: root.timerMode === "multiple"
       ? "FreshBooks has multiple unlogged timers"
       : "Refresh FreshBooks time tracking"
