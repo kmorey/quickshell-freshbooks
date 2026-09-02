@@ -14,6 +14,7 @@ BarWidget {
   readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
   readonly property string iconGlyph: "󰔛"
+  readonly property string uiRevision: "contrast-v2"
   readonly property string label: {
     if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"
@@ -39,6 +40,8 @@ BarWidget {
       opened: root.opened,
       panelLoaded: panelLoader.status === Loader.Ready,
       panelStatus: panelLoader.status,
+      uiRevision: root.uiRevision,
+      selectedContentRole: panelLoader.item ? String(panelLoader.item.selectedContentRole || "") : "unavailable",
       timerMode: root.timerMode,
       running: root.activeTimer ? root.activeTimer.running === true : false,
       busy: root.timeTracking ? root.timeTracking.busy === true : false,

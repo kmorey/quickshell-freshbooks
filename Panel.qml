@@ -55,18 +55,20 @@ Panel {
   property string entrySnapshotToken: ""
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color selectedContentColor: Model.readableContentRole(
+  readonly property string selectedContentRole: Model.readableContentRole(
     foreground,
     Color.background,
     Style.selectedFillFor(foreground, Color.accent),
     Color.popups.background
-  ) === "background" ? Color.background : foreground
-  readonly property color hoverContentColor: Model.readableContentRole(
+  )
+  readonly property color selectedContentColor: selectedContentRole === "background" ? Color.background : foreground
+  readonly property string hoverContentRole: Model.readableContentRole(
     foreground,
     Color.background,
     Style.hoverFillFor(foreground, Color.accent),
     Color.popups.background
-  ) === "background" ? Color.background : foreground
+  )
+  readonly property color hoverContentColor: hoverContentRole === "background" ? Color.background : foreground
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
   readonly property bool canMutate: timeTracking && !timeTracking.busy && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
 
@@ -798,7 +800,9 @@ Panel {
             Text {
               width: parent.width
               visible: root.timeTracking && root.timeTracking.activeTimer
-              text: "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
+              text: root.timeTracking && root.timeTracking.activeTimer
+                ? "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
+                : ""
               color: Color.accent
               font.family: root.fontFamily
               horizontalAlignment: Text.AlignHCenter
