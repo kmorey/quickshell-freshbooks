@@ -77,6 +77,8 @@ test('ticks a running Active Timer from the confirmed observation and never tick
   assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: false, observedAtMs }, observedAtMs + 4550), 120)
   assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: true, observedAtMs }, observedAtMs - 1000), 120)
   assert.equal(model.formatDuration(3661), '01:01:01')
+  assert.equal(model.formatHoursMinutes(3661), '01:01')
+  assert.equal(model.formatHoursMinutes(59), '00:00')
 })
 
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {

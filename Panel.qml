@@ -343,7 +343,7 @@ Panel {
     open: root.opened
     centerOnBar: false
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(root.tab === "calendar" ? 620 : 460))
+    contentWidth: panel.fittedContentWidth(Style.space(460))
     contentHeight: panel.fittedContentHeight(Style.space(560))
 
     PanelKeyCatcher {
@@ -735,7 +735,7 @@ Panel {
                   border.width: root.calendarCursorDateKey === modelData.key ? 2 : (root.todayDateKey === modelData.key ? 1 : 0)
                   border.color: root.calendarCursorDateKey === modelData.key ? root.foreground : Color.accent
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatDuration((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0).replace(/^00:/, "") : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatHoursMinutes((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0) : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: root.foreground; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
                   MouseArea {
                     anchors.fill: parent

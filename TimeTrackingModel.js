@@ -182,6 +182,13 @@ function formatDuration(seconds) {
   return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
+function formatHoursMinutes(seconds) {
+  var totalMinutes = Math.floor(integerSeconds(seconds) / 60)
+  var hours = Math.floor(totalMinutes / 60)
+  var minutes = totalMinutes % 60
+  return pad2(hours) + ":" + pad2(minutes)
+}
+
 function parseDurationInput(value) {
   var match = /^(\d+):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim())
   if (!match) return null
@@ -284,6 +291,7 @@ if (typeof module !== "undefined") module.exports = {
   elapsedSeconds: elapsedSeconds,
   entryDateKey: entryDateKey,
   formatDuration: formatDuration,
+  formatHoursMinutes: formatHoursMinutes,
   parseDurationInput: parseDurationInput,
   projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,

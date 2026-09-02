@@ -145,4 +145,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /id:\s*projectMetaLabel/)
   assert.match(panel, /width:\s*\(calendarGrid\.width - calendarGrid\.spacing \* 6\) \/ 7/)
   assert.doesNotMatch(panel, /panel\.width - Style\.space\(36\)/)
+  assert.match(panel, /contentWidth:\s*panel\.fittedContentWidth\(Style\.space\(460\)\)/)
+  assert.match(panel, /Model\.formatHoursMinutes/)
+  assert.doesNotMatch(panel, /root\.tab === "calendar" \? 620 : 460/)
 })
