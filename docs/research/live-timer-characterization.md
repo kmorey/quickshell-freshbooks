@@ -34,6 +34,12 @@ The FreshBooks web UI pauses a running timer with one `PUT /comments/business/<I
 
 The FreshBooks web UI resumes a paused timer with one `POST /comments/business/<ID>/time_entries`. It creates a new open Timer Segment with `duration: null`, the current UTC start timestamp, the existing timer identity in `timer.id`, and the prior note, project, service, timezone, and flags. The observed request left `identity_id` and `local_started_at` null rather than copying them from the closed segment. The prior segment remains closed with its stored duration. Resume therefore appends to the logical timer; it does not reopen or mutate an earlier segment.
 
+## Running Duration Correction request shape
+
+Correcting the running timer caused one `PUT /comments/business/<ID>/time_entries/<ID>` per Timer Segment. Each payload carried the shared timer identity and normalized common metadata. Closed segments retained their fixed durations and start timestamps. The open segment retained `duration: null`, but FreshBooks rebased its UTC and local start timestamps so that completed segment durations plus the open segment's elapsed time matched the requested aggregate total.
+
+Immediately after this correction the web UI displayed `01:00:01` and continued ticking by seconds. This confirms that the editor changes the logical timer's aggregate elapsed duration rather than the open segment alone. The observed text entry was interpreted as a one-hour target; the plugin should use an explicit parser and preview rather than depend on ambiguous browser-field formatting.
+
 ## Public Time Entry endpoint limitations
 
 A public Time Entry `PUT` carrying the existing timer identity and `is_running=true` was accepted but did not resume a paused web-created timer. An earlier update on an API-created unlogged entry without a genuine timer identity could not produce a remotely paused state. The genuine pause request closes the open Timer Segment with a concrete duration, while resume POSTs a new open segment carrying the existing timer identity.
@@ -53,7 +59,7 @@ The controlled scripts tracked every created entry and deleted it in `finally`. 
 
 ## Remaining characterization work
 
-Capture the FreshBooks web request method, path, and non-secret payload changes for a running Duration Correction and final logging. Do not capture or publish cookies, authorization headers, CSRF values, live identifiers, or full HAR files. Then validate the observed start, pause, resume, correction, and log operations with disposable data before adding them to `freshbooks-cli`.
+Capture the FreshBooks web request method, path, and non-secret payload changes for final logging. Do not retain or publish cookies, authorization headers, CSRF values, live identifiers, or full HAR files. Then validate the observed start, pause, resume, correction, and log operations with disposable data before adding them to `freshbooks-cli`.
 
 ## Primary references
 
