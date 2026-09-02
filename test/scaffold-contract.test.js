@@ -119,6 +119,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /entryDateField/)
   assert.match(panel, /property int cursorIndex/)
   assert.match(panel, /onContainsMouseChanged/)
+  assert.doesNotMatch(panel, /\};\s*on[A-Z]/)
   const durationEditor = panel.slice(panel.indexOf('id: durationField'), panel.indexOf('Row {', panel.indexOf('id: durationField')))
   assert.doesNotMatch(durationEditor, /onAccepted:/)
   assert.match(panel, /draftTimerDurationDirty/)

@@ -554,7 +554,22 @@ Panel {
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatDuration((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0).replace(/^00:/, "") : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
                   Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: root.foreground; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
-                  MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) { root.calendarCursorDateKey = modelData.key; root.calendarGridFocused = true }; onClicked: { root.selectedDateKey = modelData.key; root.calendarCursorDateKey = modelData.key; root.calendarGridFocused = true; root.keyboardCursor = 0 } }
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onContainsMouseChanged: {
+                      if (!containsMouse) return
+                      root.calendarCursorDateKey = modelData.key
+                      root.calendarGridFocused = true
+                    }
+                    onClicked: {
+                      root.selectedDateKey = modelData.key
+                      root.calendarCursorDateKey = modelData.key
+                      root.calendarGridFocused = true
+                      root.keyboardCursor = 0
+                    }
+                  }
                 }
               }
             }
@@ -585,7 +600,17 @@ Panel {
                     border.color: Color.accent
                     Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(100); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
                     Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
-                    MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) { root.keyboardCursor = index + 1; root.calendarGridFocused = false }; onClicked: root.beginEditEntry(modelData) }
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onContainsMouseChanged: {
+                        if (!containsMouse) return
+                        root.keyboardCursor = index + 1
+                        root.calendarGridFocused = false
+                      }
+                      onClicked: root.beginEditEntry(modelData)
+                    }
                   }
                 }
               }
@@ -674,7 +699,19 @@ Panel {
     color: actionMouse.containsMouse || selected ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
     opacity: enabled ? 1 : 0.45
     Text { id: actionLabel; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: root.fontFamily }
-    MouseArea { id: actionMouse; anchors.fill: parent; hoverEnabled: true; enabled: action.enabled; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) { if (action.cursorIndex >= 0) root.keyboardCursor = action.cursorIndex; action.hovered() }; onClicked: action.triggered() }
+    MouseArea {
+      id: actionMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      enabled: action.enabled
+      cursorShape: Qt.PointingHandCursor
+      onContainsMouseChanged: {
+        if (!containsMouse) return
+        if (action.cursorIndex >= 0) root.keyboardCursor = action.cursorIndex
+        action.hovered()
+      }
+      onClicked: action.triggered()
+    }
   }
 
   Connections {
