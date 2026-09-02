@@ -28,7 +28,7 @@ omarchy plugin add https://github.com/kmorey/quickshell-freshbooks --enable
 
 Add the **FreshBooks Time** widget to the bar through Omarchy's bar settings. Click the bar timer to open the panel.
 
-Authentication and OAuth credentials remain owned by `freshbooks-cli`. This plugin never reads the keyring, stores tokens, or writes runtime data into its installed checkout.
+Authentication and OAuth credentials remain owned by `freshbooks-cli`. This plugin never reads the keyring, stores tokens, or writes runtime data into its installed checkout. Unsubmitted editor drafts are atomically stored in Quickshell's per-shell state directory and removed after a confirmed save.
 
 ## Development
 

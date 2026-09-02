@@ -55,6 +55,10 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /property var cliAdapter: productionCli/)
   assert.match(service, /function useAdapter\(adapter\)/)
   assert.equal((service.match(/CliAdapter\s*\{/g) || []).length, 1)
+  assert.match(service, /Quickshell\.statePath\("kmorey\.freshbooks-time-drafts\.json"\)/)
+  assert.match(service, /atomicWrites: true/)
+  assert.match(service, /property int schemaVersion: 1/)
+  assert.doesNotMatch(service, /Qt\.resolvedUrl\([^)]*draft/i)
 })
 
 test('ships timer, project, and calendar workflows in one keyboard panel', () => {

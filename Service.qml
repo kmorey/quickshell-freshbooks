@@ -5,6 +5,11 @@ import "TimeTrackingModel.js" as Model
 Item {
   id: root
 
+  property alias draftTimerId: stateData.timerId
+  property alias draftTimerNote: stateData.timerNote
+  property alias draftTimerDuration: stateData.timerDuration
+  property alias entryDraft: stateData.entryDraft
+
   property var shell: null
   property var manifest: null
   property var pluginRegistry: null
@@ -40,6 +45,14 @@ Item {
   property int _requestSerial: 0
   property bool _refreshQueued: false
   property var _conflictRequest: null
+
+  function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
+  function clearEntryDraft() { stateData.entryDraft = ({}) }
+  function clearTimerDraft() {
+    stateData.timerId = ""
+    stateData.timerNote = ""
+    stateData.timerDuration = ""
+  }
 
   function withSnapshot(argv, record) {
     var result = argv.slice()
@@ -264,7 +277,11 @@ Item {
       if (completed.intent === "refreshTimers") adoptTimerData(data)
       else if (completed.intent === "refreshProjects") projects = Array.isArray(data) ? data : []
       else if (completed.intent === "refreshEntries") entries = Array.isArray(data) ? data : []
-      else reconcile = true
+      else {
+        if (completed.intent === "updateTimerNote" || completed.intent === "correctDuration") clearTimerDraft()
+        if (completed.intent === "createEntry" || completed.intent === "updateEntry") clearEntryDraft()
+        reconcile = true
+      }
     }
     if (phase !== "error") phase = conflictPending ? "conflict" : (timerMode === "multiple" ? "ambiguous" : "ready")
     // Mutation responses are authoritative, but their exact normalized shape
@@ -281,6 +298,30 @@ Item {
   }
 
   CliAdapter { id: productionCli }
+
+  FileView {
+    id: draftFile
+    path: Quickshell.statePath("kmorey.freshbooks-time-drafts.json")
+    atomicWrites: true
+    printErrors: false
+    onAdapterUpdated: writeAdapter()
+    onLoaded: {
+      if (stateData.schemaVersion !== 1) {
+        stateData.schemaVersion = 1
+        root.clearTimerDraft()
+        root.clearEntryDraft()
+      }
+    }
+
+    JsonAdapter {
+      id: stateData
+      property int schemaVersion: 1
+      property string timerId: ""
+      property string timerNote: ""
+      property string timerDuration: ""
+      property var entryDraft: ({})
+    }
+  }
 
   Timer {
     interval: 15000

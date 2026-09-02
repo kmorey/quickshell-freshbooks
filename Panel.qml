@@ -54,6 +54,7 @@ Panel {
     refresh()
     controller.show()
     if (timeTracking) timeTracking.registerVisibleConsumer(consumerId)
+    Qt.callLater(function() { root.hydrateDrafts() })
   }
 
   function close() {
@@ -78,6 +79,49 @@ Panel {
 
   function projectServiceId(project) {
     return project && Array.isArray(project.services) && project.services.length ? project.services[0].id : null
+  }
+
+  function hydrateDrafts() {
+    if (!timeTracking) return
+    var timer = timeTracking.activeTimer
+    if (timer) {
+      var matchingDraft = String(timeTracking.draftTimerId || "") === String(timer.id)
+      noteField.text = matchingDraft && timeTracking.draftTimerNote !== "" ? timeTracking.draftTimerNote : String(timer.note || "")
+      durationField.text = matchingDraft && timeTracking.draftTimerDuration !== "" ? timeTracking.draftTimerDuration : Model.formatDuration(timer.elapsedSeconds)
+    } else {
+      noteField.text = ""
+      durationField.text = ""
+    }
+    var draft = timeTracking.entryDraft || {}
+    if (String(draft.mode || "") !== "") {
+      if (String(draft.selectedDate || "") !== "") selectedDateKey = String(draft.selectedDate)
+      editingEntryId = String(draft.mode)
+      entryProjectId = String(draft.projectId || "")
+      entryServiceId = String(draft.serviceId || "")
+      entrySnapshotToken = String(draft.snapshotToken || "")
+      entryNoteField.text = String(draft.note || "")
+      entryDurationField.text = String(draft.duration || "")
+    }
+  }
+
+  function persistTimerDraft() {
+    if (!timeTracking || !timeTracking.activeTimer) return
+    timeTracking.draftTimerId = String(timeTracking.activeTimer.id)
+    timeTracking.draftTimerNote = noteField.text
+    timeTracking.draftTimerDuration = durationField.text
+  }
+
+  function persistEntryDraft() {
+    if (!timeTracking || editingEntryId === "") return
+    timeTracking.saveEntryDraft({
+      mode: editingEntryId,
+      projectId: entryProjectId,
+      serviceId: entryServiceId,
+      snapshotToken: entrySnapshotToken,
+      note: entryNoteField.text,
+      duration: entryDurationField.text,
+      selectedDate: selectedDateKey
+    })
   }
 
   function startProject(project) {
@@ -108,6 +152,7 @@ Panel {
     entrySnapshotToken = ""
     entryNoteField.text = ""
     entryDurationField.text = "00:00"
+    persistEntryDraft()
   }
 
   function beginEditEntry(entry) {
@@ -118,6 +163,7 @@ Panel {
     entrySnapshotToken = String(entry.snapshotToken || "")
     entryNoteField.text = String(entry.note || "")
     entryDurationField.text = Model.formatDuration(entry.durationSeconds !== undefined ? entry.durationSeconds : entry.duration || 0)
+    persistEntryDraft()
   }
 
   function saveEntry() {
@@ -127,7 +173,6 @@ Panel {
     if (editingEntryId === "new") fields.startedAt = selectedDateKey + "T12:00:00"
     if (editingEntryId === "new") timeTracking.createEntry(fields)
     else timeTracking.updateEntry(editingEntryId, fields, entrySnapshotToken)
-    editingEntryId = ""
   }
 
   KeyboardPanel {
@@ -220,7 +265,7 @@ Panel {
               width: parent.width
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "Notes"
-              text: root.timeTracking && root.timeTracking.activeTimer ? String(root.timeTracking.activeTimer.note || "") : ""
+              onTextEdited: root.persistTimerDraft()
               onEditingFinished: if (root.timeTracking && enabled && text !== String(root.timeTracking.activeTimer.note || "")) root.timeTracking.updateTimerNote(text)
             }
             TextField {
@@ -228,7 +273,7 @@ Panel {
               width: parent.width
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "HH:MM or HH:MM:SS"
-              text: root.timeTracking && root.timeTracking.activeTimer ? Model.formatDuration(root.timeTracking.activeTimer.elapsedSeconds) : ""
+              onTextEdited: root.persistTimerDraft()
               onAccepted: {
                 var seconds = Model.parseDurationInput(text)
                 if (seconds !== null && root.timeTracking) root.timeTracking.correctDuration(seconds)
@@ -370,8 +415,8 @@ Panel {
               width: parent.width
               spacing: Style.space(7)
               Text { text: root.editingEntryId === "new" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes" }
-              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onAccepted: root.saveEntry() }
+              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft() }
+              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(); onAccepted: root.saveEntry() }
               Text { text: "Project and service"; color: Qt.darker(root.foreground, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
               Flickable {
                 width: parent.width
@@ -391,7 +436,7 @@ Panel {
                       radius: Style.cornerRadius
                       color: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
                       Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId) } }
+                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft() } }
                     }
                   }
                 }
@@ -399,7 +444,7 @@ Panel {
               Row {
                 spacing: Style.space(8)
                 ActionButton { label: "Save"; enabled: Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== ""; onTriggered: root.saveEntry() }
-                ActionButton { label: "Cancel"; onTriggered: { root.editingEntryId = ""; root.confirmingDelete = false } }
+                ActionButton { label: "Cancel"; onTriggered: { root.editingEntryId = ""; root.confirmingDelete = false; if (root.timeTracking) root.timeTracking.clearEntryDraft() } }
                 ActionButton {
                   visible: root.editingEntryId !== "new"
                   label: root.confirmingDelete ? "Delete now" : "Delete"
@@ -409,6 +454,7 @@ Panel {
                       root.timeTracking.deleteEntry(root.editingEntryId)
                       root.editingEntryId = ""
                       root.confirmingDelete = false
+                      root.timeTracking.clearEntryDraft()
                     }
                   }
                 }
@@ -432,4 +478,17 @@ Panel {
     Text { id: actionLabel; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: root.fontFamily }
     MouseArea { id: actionMouse; anchors.fill: parent; hoverEnabled: true; enabled: action.enabled; cursorShape: Qt.PointingHandCursor; onClicked: action.triggered() }
   }
+
+  Connections {
+    target: root.timeTracking
+    ignoreUnknownSignals: true
+    function onActiveTimerChanged() { root.hydrateDrafts() }
+    function onEntryDraftChanged() {
+      if (!root.timeTracking || String((root.timeTracking.entryDraft || {}).mode || "") !== "") return
+      root.editingEntryId = ""
+      root.confirmingDelete = false
+    }
+  }
+
+  Component.onCompleted: Qt.callLater(function() { root.hydrateDrafts() })
 }
