@@ -660,13 +660,38 @@ Panel {
                     required property var modelData
                     required property int index
                     width: projectColumn.width
-                    height: Style.space(46)
+                    height: Style.space(58)
                     radius: Style.cornerRadius
                     color: projectMouse.containsMouse || root.keyboardCursor === index ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
                     border.width: root.keyboardCursor === index ? 1 : 0
                     border.color: Color.accent
-                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(60); text: String(modelData.project.clientName || "") + (modelData.project.clientName ? " · " : "") + String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); elide: Text.ElideRight; color: root.foreground; font.family: root.fontFamily }
-                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
+                    Column {
+                      anchors.left: parent.left
+                      anchors.right: projectAction.left
+                      anchors.leftMargin: Style.space(10)
+                      anchors.rightMargin: Style.space(10)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(2)
+                      Text {
+                        id: projectTitleLabel
+                        width: parent.width
+                        text: String(modelData.project.title || modelData.project.name || "Project")
+                        elide: Text.ElideRight
+                        color: root.foreground
+                        font.family: root.fontFamily
+                      }
+                      Text {
+                        id: projectMetaLabel
+                        width: parent.width
+                        text: String(modelData.project.clientName || "Internal")
+                          + (modelData.serviceName ? " · " + modelData.serviceName : "")
+                        elide: Text.ElideRight
+                        color: Qt.darker(root.foreground, 1.25)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                    }
+                    Text { id: projectAction; anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
                     MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; enabled: root.canMutate; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) root.keyboardCursor = index; onClicked: root.startShortcut(modelData) }
                   }
                 }
@@ -696,13 +721,14 @@ Panel {
             }
             Grid {
               id: calendarGrid
+              width: parent.width
               columns: 7
               spacing: Style.space(3)
               Repeater {
                 model: root.monthCells
                 Rectangle {
                   required property var modelData
-                  width: (panel.width - Style.space(36)) / 7
+                  width: (calendarGrid.width - calendarGrid.spacing * 6) / 7
                   height: Style.space(45)
                   radius: Style.cornerRadius
                   color: root.selectedDateKey === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, modelData.inMonth ? 0.07 : 0.025)

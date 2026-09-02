@@ -141,4 +141,8 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /Client secret/)
   assert.match(panel, /Open FreshBooks authorization/)
   assert.match(panel, /Choose a business/)
+  assert.match(panel, /id:\s*projectTitleLabel/)
+  assert.match(panel, /id:\s*projectMetaLabel/)
+  assert.match(panel, /width:\s*\(calendarGrid\.width - calendarGrid\.spacing \* 6\) \/ 7/)
+  assert.doesNotMatch(panel, /panel\.width - Style\.space\(36\)/)
 })
