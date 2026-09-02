@@ -40,6 +40,14 @@ Correcting the running timer caused one `PUT /comments/business/<ID>/time_entrie
 
 Immediately after this correction the web UI displayed `01:00:01` and continued ticking by seconds. This confirms that the editor changes the logical timer's aggregate elapsed duration rather than the open segment alone. The observed text entry was interpreted as a one-hour target; the plugin should use an explicit parser and preview rather than depend on ambiguous browser-field formatting.
 
+## Log request shape
+
+Before logging, the web UI fetched `GET /comments/business/<ID>/project/<ID>`. The non-secret decisions relevant to the plugin are whether the project is active, incomplete, permits time tracking, and still contains the selected service with its billability setting. The plugin-compatible CLI should perform the equivalent preflight from an authoritative project read before finalizing a Timer Switch.
+
+Logging then sent `PUT /comments/business/<ID>/timers/<ID>` with a `timer.time_entries` array containing the Time Entry representation to finalize. A follow-up read showed one logged entry, no unlogged entries, and no open segment for the disposable note. This short entry rounded to zero stored seconds, consistent with FreshBooks' nearest-minute timer rounding.
+
+The timer identity and segment set in this log capture did not match the immediately preceding correction capture. Until the interaction sequence is confirmed or reproduced under CLI control, the endpoint and project preflight are evidence for the log contract, but the capture must not be used to infer an identity replacement during logging.
+
 ## Public Time Entry endpoint limitations
 
 A public Time Entry `PUT` carrying the existing timer identity and `is_running=true` was accepted but did not resume a paused web-created timer. An earlier update on an API-created unlogged entry without a genuine timer identity could not produce a remotely paused state. The genuine pause request closes the open Timer Segment with a concrete duration, while resume POSTs a new open segment carrying the existing timer identity.
@@ -55,11 +63,11 @@ Updating the duration of an API-created unlogged entry persisted the number but 
 
 ## Cleanup verification
 
-The controlled scripts tracked every created entry and deleted it in `finally`. A bounded follow-up query found zero disposable marker entries and zero matching timers. The separate web-created characterization timer was logged for observation, then its single consolidated logged entry was deleted; a final query again found zero matching entries and timers.
+The controlled scripts tracked every created entry and deleted it in `finally`. Bounded follow-up queries found zero disposable marker entries and zero matching timers. Each separate web-created characterization timer was logged for observation, then its consolidated logged entry was deleted; the final query again found zero matching entries and timers.
 
 ## Remaining characterization work
 
-Capture the FreshBooks web request method, path, and non-secret payload changes for final logging. Do not retain or publish cookies, authorization headers, CSRF values, live identifiers, or full HAR files. Then validate the observed start, pause, resume, correction, and log operations with disposable data before adding them to `freshbooks-cli`.
+Validate the observed start, pause, resume, correction, and log operations with disposable data under CLI control. Reconfirm the project preflight and timer identity continuity during logging. Do not retain or publish cookies, authorization headers, CSRF values, live identifiers, personal data, or full HAR files.
 
 ## Primary references
 
