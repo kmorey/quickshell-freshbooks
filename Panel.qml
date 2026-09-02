@@ -443,6 +443,7 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(8)
               ActionButton {
+                cursorIndex: 2
                 selected: root.tab === "timer" && root.keyboardCursor === 2
                 label: root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"
                 enabled: root.canMutate && root.timeTracking.activeTimer
@@ -451,8 +452,8 @@ Panel {
                   else root.timeTracking.resume()
                 }
               }
-              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
-              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
+              ActionButton { cursorIndex: 3; selected: root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
+              ActionButton { cursorIndex: 4; selected: root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
             }
             Text {
               visible: root.timeTracking && root.timeTracking.lastError !== ""
@@ -559,7 +560,7 @@ Panel {
             Row {
               width: parent.width
               Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              ActionButton { id: addEntryButton; selected: root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; onTriggered: root.beginAddEntry() }
+              ActionButton { id: addEntryButton; cursorIndex: 0; selected: root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; onHovered: root.calendarGridFocused = false; onTriggered: root.beginAddEntry() }
             }
             Flickable {
               visible: root.entryEditorMode === "closed"
@@ -660,7 +661,9 @@ Panel {
     id: action
     property string label: ""
     property bool selected: false
+    property int cursorIndex: -1
     signal triggered()
+    signal hovered()
     activeFocusOnTab: true
     Keys.onReturnPressed: action.triggered()
     Keys.onSpacePressed: action.triggered()
@@ -670,7 +673,7 @@ Panel {
     color: actionMouse.containsMouse || selected ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
     opacity: enabled ? 1 : 0.45
     Text { id: actionLabel; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: root.fontFamily }
-    MouseArea { id: actionMouse; anchors.fill: parent; hoverEnabled: true; enabled: action.enabled; cursorShape: Qt.PointingHandCursor; onClicked: action.triggered() }
+    MouseArea { id: actionMouse; anchors.fill: parent; hoverEnabled: true; enabled: action.enabled; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: if (containsMouse) { if (action.cursorIndex >= 0) root.keyboardCursor = action.cursorIndex; action.hovered() }; onClicked: action.triggered() }
   }
 
   Connections {
@@ -690,6 +693,11 @@ Panel {
       var machineToday = root.localDateKey(root.today)
       if (root.selectedDateKey === machineToday) root.selectedDateKey = localToday
       if (root.calendarCursorDateKey === machineToday) root.calendarCursorDateKey = localToday
+      var local = Model.parseDateKey(localToday)
+      if (local && root.viewYear === root.today.getFullYear() && root.viewMonth === root.today.getMonth() + 1) {
+        root.viewYear = local.year
+        root.viewMonth = local.month
+      }
     }
     function onDraftTimerDurationDirtyChanged() {
       if (root.timeTracking && !root.timeTracking.draftTimerDurationDirty) root.hydrateDrafts()

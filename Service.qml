@@ -228,9 +228,11 @@ Item {
     var payload = {}
     var values = fields || {}
     for (var key in values) payload[key] = values[key]
-    payload.knownEntryIds = []
-    for (var i = 0; i < entries.length; i++) payload.knownEntryIds.push(String(entries[i].id))
-    enqueue("createEntry", appendFieldArguments(["time", "add"], fields), payload, true)
+    var targetDate = String(payload.localDate || "")
+    // Establish a baseline for the exact target day before creating. If the
+    // later write has an unknown outcome, only an ID absent from this baseline
+    // can prove that FreshBooks accepted it.
+    enqueue("prepareCreateEntry", ["time", "list", "--from", targetDate, "--to", targetDate], payload, false)
   }
 
   function updateEntry(entryId, fields, snapshotToken) {
@@ -250,6 +252,22 @@ Item {
     _requestSerial += 1
     var next = _queue.slice()
     next.push({
+      id: "request-" + _requestSerial,
+      intent: intent,
+      argv: argv.slice(),
+      payload: payload || {},
+      mutation: mutation === true
+    })
+    _queue = next
+    pump()
+    return true
+  }
+
+  function enqueueNext(intent, argv, payload, mutation) {
+    if (mutation === true && (outcomeUnknown || conflictPending)) return false
+    _requestSerial += 1
+    var next = _queue.slice()
+    next.unshift({
       id: "request-" + _requestSerial,
       intent: intent,
       argv: argv.slice(),
@@ -375,6 +393,7 @@ Item {
     if (!request) return
     var received = Array.isArray(data) ? data : []
     if (request.intent === "createEntry") {
+      if (String(request.payload.knownEntryDate || "") !== String(request.payload.localDate || "")) return
       var known = request.payload.knownEntryIds || []
       for (var i = 0; i < received.length; i++) {
         if (known.indexOf(String(received[i].id)) === -1 && entryMatchesFields(received[i], request.payload)) {
@@ -400,6 +419,7 @@ Item {
     if (!_current || String(_current.id) !== String(requestId)) return
     var completed = _current
     var reconcile = false
+    var followupCreate = null
     _current = null
     if (completed.intent === "refreshTimers") _refreshQueued = false
 
@@ -461,6 +481,19 @@ Item {
         cacheData.recentEntries = recentCache
       }
       else if (completed.intent === "refreshDiagnostics") diagnostics = data || ({})
+      else if (completed.intent === "prepareCreateEntry") {
+        var createPayload = {}
+        for (var createKey in completed.payload) createPayload[createKey] = completed.payload[createKey]
+        createPayload.knownEntryDate = String(createPayload.localDate || "")
+        createPayload.knownEntryIds = []
+        var baselineEntries = Array.isArray(data) ? data : []
+        for (var baselineIndex = 0; baselineIndex < baselineEntries.length; baselineIndex++)
+          createPayload.knownEntryIds.push(String(baselineEntries[baselineIndex].id))
+        followupCreate = {
+          argv: appendFieldArguments(["time", "add"], createPayload),
+          payload: createPayload
+        }
+      }
       else if (completed.intent === "refreshEntries") {
         if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries") reconcileUnknownEntry(data)
         adoptEntryData(data)
@@ -491,7 +524,8 @@ Item {
     // Mutation responses are authoritative, but their exact normalized shape
     // belongs to the CLI contract. Reconcile the whole timer set before the
     // next view treats it as current.
-    if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
+    if (followupCreate) enqueueNext("createEntry", followupCreate.argv, followupCreate.payload, true)
+    else if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
     else pump()
   }
 
@@ -511,11 +545,13 @@ Item {
     onAdapterUpdated: writeAdapter()
     onLoaded: {
       if (stateData.schemaVersion !== 2) {
+        draftBackup.setText(text())
         stateData.schemaVersion = 2
         root.clearTimerDraft()
         root.clearEntryDraft()
       }
     }
+    onLoadFailed: if (String(text() || "") !== "") draftBackup.setText(text())
 
     JsonAdapter {
       id: stateData
@@ -528,6 +564,13 @@ Item {
       property bool timerDurationDirty: false
       property var entryDraft: ({})
     }
+  }
+
+  FileView {
+    id: draftBackup
+    path: Quickshell.statePath("kmorey.freshbooks-time-drafts.incompatible.json")
+    atomicWrites: true
+    printErrors: false
   }
 
   FileView {

@@ -69,6 +69,9 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /--limit", "200/)
   assert.match(service, /Quickshell\.cachePath\("kmorey\.freshbooks-time-cache\.json"\)/)
   assert.match(service, /refreshDiagnostics/)
+  assert.match(service, /prepareCreateEntry/)
+  assert.match(service, /knownEntryDate/)
+  assert.match(service, /freshbooks-time-drafts\.incompatible\.json/)
   assert.doesNotMatch(service, /Qt\.resolvedUrl\([^)]*draft/i)
 })
 
@@ -95,6 +98,8 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /onMoveRequested/)
   assert.match(panel, /onActivateRequested/)
   assert.match(panel, /entryDateField/)
+  assert.match(panel, /property int cursorIndex/)
+  assert.match(panel, /onContainsMouseChanged/)
   const durationEditor = panel.slice(panel.indexOf('id: durationField'), panel.indexOf('Row {', panel.indexOf('id: durationField')))
   assert.doesNotMatch(durationEditor, /onAccepted:/)
   assert.match(panel, /draftTimerDurationDirty/)
