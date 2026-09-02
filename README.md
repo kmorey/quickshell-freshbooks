@@ -8,6 +8,8 @@ The popup provides:
 - a Projects tab ordered by the active and most recently used projects, with one-click safe switching
 - a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists
 
+Timer and entry drafts are compared against FreshBooks snapshot tokens. If the browser or another client changes a dirty record, the panel offers **Reload** or **Apply mine** instead of silently overwriting it. Timed-out mutations are reconciled with a refresh before retry is enabled.
+
 FreshBooks remains authoritative. The plugin refreshes when opened, after mutations, and every 15 seconds while visible. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
 
 ## Requirements
@@ -37,7 +39,7 @@ npm test
 omarchy plugin validate .
 ```
 
-The Node test suite covers calendar/date behavior, timer projections, duration parsing, recent-project ordering, the fake CLI seam, and packaging contracts. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML.
+The Node test suite covers calendar/date behavior, timer projections, duration parsing, recent-project ordering, the fake CLI seam, and packaging contracts. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML; keyboard/pointer interaction and horizontal, vertical, narrow, and multi-monitor layouts remain part of that manual gate.
 
 ## Privacy
 

@@ -8,6 +8,9 @@ Item {
   property alias draftTimerId: stateData.timerId
   property alias draftTimerNote: stateData.timerNote
   property alias draftTimerDuration: stateData.timerDuration
+  property alias draftTimerSnapshotToken: stateData.timerSnapshotToken
+  property alias draftTimerNoteDirty: stateData.timerNoteDirty
+  property alias draftTimerDurationDirty: stateData.timerDurationDirty
   property alias entryDraft: stateData.entryDraft
 
   property var shell: null
@@ -45,6 +48,7 @@ Item {
   property int _requestSerial: 0
   property bool _refreshQueued: false
   property var _conflictRequest: null
+  property bool _draftConflict: false
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function clearEntryDraft() { stateData.entryDraft = ({}) }
@@ -52,6 +56,17 @@ Item {
     stateData.timerId = ""
     stateData.timerNote = ""
     stateData.timerDuration = ""
+    stateData.timerSnapshotToken = ""
+    stateData.timerNoteDirty = false
+    stateData.timerDurationDirty = false
+  }
+  function clearTimerNoteDraft() {
+    stateData.timerNote = ""
+    stateData.timerNoteDirty = false
+  }
+  function clearTimerDurationDraft() {
+    stateData.timerDuration = ""
+    stateData.timerDurationDirty = false
   }
 
   function withSnapshot(argv, record) {
@@ -165,6 +180,7 @@ Item {
     var options = [
       ["durationSeconds", "--duration"],
       ["startedAt", "--started-at"],
+      ["localDate", "--date"],
       ["projectId", "--project"],
       ["clientId", "--client"],
       ["serviceId", "--service"],
@@ -188,11 +204,14 @@ Item {
     enqueue("updateEntry", argv, fields || {}, true)
   }
 
-  function deleteEntry(entryId) {
-    enqueue("deleteEntry", ["time", "delete", String(entryId), "--yes"], { entryId: entryId }, true)
+  function deleteEntry(entryId, snapshotToken) {
+    var argv = ["time", "delete", String(entryId), "--yes"]
+    if (String(snapshotToken || "") !== "") argv.push("--snapshot", String(snapshotToken))
+    enqueue("deleteEntry", argv, { entryId: entryId }, true)
   }
 
   function enqueue(intent, argv, payload, mutation) {
+    if (mutation === true && (outcomeUnknown || conflictPending)) return false
     _requestSerial += 1
     var next = _queue.slice()
     next.push({
@@ -204,16 +223,34 @@ Item {
     })
     _queue = next
     pump()
+    return true
   }
 
   function resolveConflictReload() {
+    var requestIntent = _conflictRequest ? String(_conflictRequest.intent || "") : ""
+    if (_draftConflict || requestIntent.indexOf("Timer") !== -1 || requestIntent === "correctDuration") clearTimerDraft()
+    else if (requestIntent.indexOf("Entry") !== -1) clearEntryDraft()
     conflictPending = false
+    _draftConflict = false
     _conflictRequest = null
     clearError()
     refreshAll(lastEntryFrom, lastEntryTo)
   }
 
   function resolveConflictApplyMine() {
+    if (_draftConflict && activeTimer) {
+      var noteDirty = draftTimerNoteDirty
+      var durationDirty = draftTimerDurationDirty
+      var note = draftTimerNote
+      var duration = Model.parseDurationInput(draftTimerDuration)
+      conflictPending = false
+      _draftConflict = false
+      _conflictRequest = null
+      clearError()
+      if (noteDirty) enqueue("updateTimerNote", ["timer", "update", "--id", String(activeTimer.id), "--note", String(note)], { timerId: activeTimer.id }, true)
+      if (durationDirty && duration !== null) enqueue("correctDuration", ["timer", "correct", "--id", String(activeTimer.id), "--duration", String(duration)], { timerId: activeTimer.id }, true)
+      return
+    }
     if (!_conflictRequest) return
     var request = _conflictRequest
     var argv = []
@@ -247,11 +284,43 @@ Item {
       if (timer.observedAtMs === undefined) timer.observedAtMs = receivedAt
       anchored.push(timer)
     }
+    var hasDirtyDraft = draftTimerNoteDirty || draftTimerDurationDirty
+    if (hasDirtyDraft && Model.recordSnapshotChanged(anchored, draftTimerId, draftTimerSnapshotToken)) {
+      conflictPending = true
+      _draftConflict = true
+      lastErrorCode = "REMOTE_CHANGED"
+      lastError = "FreshBooks changed this timer while you were editing. Reload it or apply your draft."
+    }
     timers = anchored
     if (timers.length === 1) selectedTimerId = String(timers[0].id)
     else if (!Model.selectedTimer(timers, selectedTimerId)) selectedTimerId = ""
     snapshotStale = false
     lastRefreshMs = Date.now()
+  }
+
+  function adoptEntryData(data) {
+    var received = Array.isArray(data) ? data : []
+    var draft = entryDraft || {}
+    var mode = String(draft.mode || "")
+    if (mode !== "" && mode !== "new" && draft.dirty === true
+        && Model.recordSnapshotChanged(received, mode, draft.snapshotToken)) {
+      var fields = {
+        durationSeconds: Model.parseDurationInput(String(draft.duration || "")),
+        projectId: draft.projectId,
+        serviceId: draft.serviceId,
+        note: draft.note
+      }
+      var draftDate = String(draft.entryDate || draft.selectedDate || "")
+      if (draftDate !== String(draft.originalDate || draftDate)) fields.localDate = draftDate
+      var argv = appendFieldArguments(["time", "update", mode], fields)
+      argv.push("--snapshot", String(draft.snapshotToken))
+      conflictPending = true
+      _draftConflict = false
+      _conflictRequest = { intent: "updateEntry", argv: argv, payload: fields, mutation: true }
+      lastErrorCode = "REMOTE_CHANGED"
+      lastError = "FreshBooks changed or removed this entry while you were editing. Reload it or apply your draft."
+    }
+    entries = received
   }
 
   function finishRequest(requestId, data, error) {
@@ -262,23 +331,38 @@ Item {
     if (completed.intent === "refreshTimers") _refreshQueued = false
 
     if (error) {
+      var unresolvedOutcome = outcomeUnknown
       phase = "error"
       lastErrorCode = String(error.code || "UNKNOWN_ERROR")
       lastError = String(error.message || "FreshBooks operation failed")
-      outcomeUnknown = error.outcomeUnknown === true
+      outcomeUnknown = error.outcomeUnknown === true || (completed.intent === "refreshTimers" && unresolvedOutcome)
       if (lastErrorCode === "REMOTE_CHANGED") {
         conflictPending = true
+        _draftConflict = false
         _conflictRequest = completed
         refresh()
       }
+      if (outcomeUnknown && completed.intent !== "refreshTimers") refresh()
+      if (outcomeUnknown && completed.intent !== "refreshTimers") {
+        var safeQueue = []
+        for (var q = 0; q < _queue.length; q++) if (!_queue[q].mutation) safeQueue.push(_queue[q])
+        _queue = safeQueue
+      }
+      if (completed.intent === "correctDuration") clearTimerDurationDraft()
     } else {
       phase = "ready"
-      if (!conflictPending) clearError()
-      if (completed.intent === "refreshTimers") adoptTimerData(data)
+      if (!conflictPending && !(completed.intent === "refreshTimers" && outcomeUnknown)) clearError()
+      if (completed.intent === "refreshTimers") {
+        adoptTimerData(data)
+        if (outcomeUnknown && !conflictPending) clearError()
+      }
       else if (completed.intent === "refreshProjects") projects = Array.isArray(data) ? data : []
-      else if (completed.intent === "refreshEntries") entries = Array.isArray(data) ? data : []
+      else if (completed.intent === "refreshEntries") adoptEntryData(data)
       else {
-        if (completed.intent === "updateTimerNote" || completed.intent === "correctDuration") clearTimerDraft()
+        if ((completed.intent === "updateTimerNote" || completed.intent === "correctDuration") && data && data.snapshotToken)
+          stateData.timerSnapshotToken = String(data.snapshotToken)
+        if (completed.intent === "updateTimerNote") clearTimerNoteDraft()
+        if (completed.intent === "correctDuration") clearTimerDurationDraft()
         if (completed.intent === "createEntry" || completed.intent === "updateEntry") clearEntryDraft()
         reconcile = true
       }
@@ -306,8 +390,8 @@ Item {
     printErrors: false
     onAdapterUpdated: writeAdapter()
     onLoaded: {
-      if (stateData.schemaVersion !== 1) {
-        stateData.schemaVersion = 1
+      if (stateData.schemaVersion !== 2) {
+        stateData.schemaVersion = 2
         root.clearTimerDraft()
         root.clearEntryDraft()
       }
@@ -315,10 +399,13 @@ Item {
 
     JsonAdapter {
       id: stateData
-      property int schemaVersion: 1
+      property int schemaVersion: 2
       property string timerId: ""
       property string timerNote: ""
       property string timerDuration: ""
+      property string timerSnapshotToken: ""
+      property bool timerNoteDirty: false
+      property bool timerDurationDirty: false
       property var entryDraft: ({})
     }
   }

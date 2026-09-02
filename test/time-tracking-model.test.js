@@ -63,6 +63,14 @@ test('projects zero, one, and multiple remote timers explicitly', () => {
   assert.equal(projected.timerCandidates.length, 2)
 })
 
+test('detects remote snapshot changes only for the selected record', () => {
+  const records = [{ id: 1, snapshotToken: 'same' }, { id: 2, snapshotToken: 'remote' }]
+  assert.equal(model.recordSnapshotChanged(records, 1, 'same'), false)
+  assert.equal(model.recordSnapshotChanged(records, 2, 'local'), true)
+  assert.equal(model.recordSnapshotChanged(records, 3, 'local'), true)
+  assert.equal(model.recordSnapshotChanged(records, 2, ''), false)
+})
+
 test('ticks a running Active Timer from the confirmed observation and never ticks paused time', () => {
   const observedAtMs = Date.parse('2026-09-01T15:00:00Z')
   assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: true, observedAtMs }, observedAtMs + 4550), 124)

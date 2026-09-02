@@ -73,7 +73,7 @@ function calendarMonth(year, month) {
 
 function entryDateKey(entry) {
   if (!entry) return ""
-  var local = String(entry.localDate || entry.date || entry.local_started_at || entry.started_at || "").slice(0, 10)
+  var local = String(entry.localDate || "").slice(0, 10)
   return parseDateKey(local) ? local : ""
 }
 
@@ -128,6 +128,18 @@ function selectedTimer(timers, selectedId) {
     }
   }
   return values.length === 1 ? values[0] : null
+}
+
+function recordSnapshotChanged(records, recordId, snapshotToken) {
+  var wantedId = String(recordId === undefined || recordId === null ? "" : recordId)
+  var baseline = String(snapshotToken || "")
+  if (wantedId === "" || baseline === "") return false
+  var values = asArray(records)
+  for (var i = 0; i < values.length; i++) {
+    var record = values[i] || {}
+    if (String(record.id) === wantedId) return String(record.snapshotToken || "") !== baseline
+  }
+  return true
 }
 
 function stateProjection(snapshot, selectedTimerId) {
@@ -245,7 +257,7 @@ function recentProjectOrder(projects, entries, activeProjectId) {
     var entry = values[i] || {}
     var id = String(entry.projectId !== undefined ? entry.projectId : "")
     if (id === "") continue
-    var timestamp = Date.parse(String(entry.startedAt || entry.started_at || entry.updatedAt || entry.updated_at || ""))
+    var timestamp = Date.parse(String(entry.startedAt || entry.updatedAt || ""))
     if (!isFinite(timestamp)) timestamp = 0
     if (lastUsed[id] === undefined || timestamp > lastUsed[id]) lastUsed[id] = timestamp
   }
@@ -277,6 +289,7 @@ if (typeof module !== "undefined") module.exports = {
   entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
+  recordSnapshotChanged: recordSnapshotChanged,
   searchProjects: searchProjects,
   searchShortcuts: searchShortcuts,
   reportingWeekTotal: reportingWeekTotal,

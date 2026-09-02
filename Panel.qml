@@ -16,6 +16,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
   property string tab: "timer"
   property string projectSearch: ""
+  property int keyboardCursor: 0
   property date today: new Date()
   property int viewYear: today.getFullYear()
   property int viewMonth: today.getMonth() + 1
@@ -29,11 +30,15 @@ Panel {
   property string editingEntryId: ""
   property string entryProjectId: ""
   property string entryServiceId: ""
+  property string entryDateKey: ""
+  property string entryOriginalDateKey: ""
+  property bool entryDraftDirty: false
   property bool confirmingDelete: false
   property string entrySnapshotToken: ""
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
+  readonly property bool canMutate: timeTracking && !timeTracking.busy && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
 
   SystemClock {
     id: panelClock
@@ -51,10 +56,10 @@ Panel {
   }
 
   function open() {
+    hydrateDrafts()
     refresh()
     controller.show()
     if (timeTracking) timeTracking.registerVisibleConsumer(consumerId)
-    Qt.callLater(function() { root.hydrateDrafts() })
   }
 
   function close() {
@@ -69,6 +74,39 @@ Panel {
   }
 
   function toggle() { opened ? close() : open() }
+
+  function switchTab(direction) {
+    var tabs = ["timer", "projects", "calendar"]
+    var index = tabs.indexOf(tab)
+    tab = tabs[(index + (direction > 0 ? 1 : 2)) % 3]
+    keyboardCursor = 0
+  }
+
+  function moveKeyboardCursor(dx, dy) {
+    if (dx !== 0) { switchTab(dx); return }
+    var count = tab === "timer" ? 3 : (tab === "projects" ? projectShortcuts.length : Math.max(1, dayEntries.length + 1))
+    keyboardCursor = Math.max(0, Math.min(count - 1, keyboardCursor + dy))
+    if (tab === "calendar" && keyboardCursor === 0) selectedDateKey = Model.addDays(selectedDateKey, dy * 7)
+  }
+
+  function activateKeyboardCursor() {
+    if (!timeTracking || timeTracking.busy) return
+    if (tab === "timer") {
+      if (keyboardCursor === 0 && timeTracking.activeTimer) timeTracking.activeTimer.running ? timeTracking.pause() : timeTracking.resume()
+      else if (keyboardCursor === 1 && timeTracking.activeTimer) timeTracking.logTimer()
+      else if (keyboardCursor === 2) refresh()
+    } else if (tab === "projects" && projectShortcuts.length) {
+      startShortcut(projectShortcuts[Math.min(keyboardCursor, projectShortcuts.length - 1)])
+    } else if (tab === "calendar") {
+      if (keyboardCursor === 0) beginAddEntry()
+      else if (dayEntries.length) beginEditEntry(dayEntries[Math.min(keyboardCursor - 1, dayEntries.length - 1)])
+    }
+  }
+
+  function deleteKeyboardSelection() {
+    if (tab !== "calendar" || editingEntryId === "" || editingEntryId === "new") return
+    confirmingDelete = true
+  }
 
   function moveMonth(delta) {
     var date = new Date(Date.UTC(viewYear, viewMonth - 1 + delta, 1))
@@ -86,33 +124,51 @@ Panel {
     var timer = timeTracking.activeTimer
     if (timer) {
       var matchingDraft = String(timeTracking.draftTimerId || "") === String(timer.id)
-      noteField.text = matchingDraft && timeTracking.draftTimerNote !== "" ? timeTracking.draftTimerNote : String(timer.note || "")
-      durationField.text = matchingDraft && timeTracking.draftTimerDuration !== "" ? timeTracking.draftTimerDuration : Model.formatDuration(timer.elapsedSeconds)
+      noteField.text = matchingDraft && timeTracking.draftTimerNoteDirty ? timeTracking.draftTimerNote : String(timer.note || "")
+      durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty ? timeTracking.draftTimerDuration : Model.formatDuration(timer.elapsedSeconds)
     } else {
       noteField.text = ""
       durationField.text = ""
     }
     var draft = timeTracking.entryDraft || {}
     if (String(draft.mode || "") !== "") {
-      if (String(draft.selectedDate || "") !== "") selectedDateKey = String(draft.selectedDate)
+      if (String(draft.selectedDate || "") !== "") {
+        selectedDateKey = String(draft.selectedDate)
+        var selected = Model.parseDateKey(selectedDateKey)
+        if (selected) { viewYear = selected.year; viewMonth = selected.month }
+      }
       editingEntryId = String(draft.mode)
       entryProjectId = String(draft.projectId || "")
       entryServiceId = String(draft.serviceId || "")
       entrySnapshotToken = String(draft.snapshotToken || "")
+      entryDateKey = String(draft.entryDate || draft.selectedDate || selectedDateKey)
+      entryOriginalDateKey = String(draft.originalDate || entryDateKey)
+      entryDraftDirty = draft.dirty === true
+      entryDateField.text = entryDateKey
       entryNoteField.text = String(draft.note || "")
       entryDurationField.text = String(draft.duration || "")
     }
   }
 
-  function persistTimerDraft() {
+  function persistTimerNoteDraft() {
     if (!timeTracking || !timeTracking.activeTimer) return
     timeTracking.draftTimerId = String(timeTracking.activeTimer.id)
+    timeTracking.draftTimerSnapshotToken = String(timeTracking.activeTimer.snapshotToken || "")
     timeTracking.draftTimerNote = noteField.text
-    timeTracking.draftTimerDuration = durationField.text
+    timeTracking.draftTimerNoteDirty = true
   }
 
-  function persistEntryDraft() {
+  function persistTimerDurationDraft() {
+    if (!timeTracking || !timeTracking.activeTimer) return
+    timeTracking.draftTimerId = String(timeTracking.activeTimer.id)
+    timeTracking.draftTimerSnapshotToken = String(timeTracking.activeTimer.snapshotToken || "")
+    timeTracking.draftTimerDuration = durationField.text
+    timeTracking.draftTimerDurationDirty = true
+  }
+
+  function persistEntryDraft(markDirty) {
     if (!timeTracking || editingEntryId === "") return
+    if (markDirty === true) entryDraftDirty = true
     timeTracking.saveEntryDraft({
       mode: editingEntryId,
       projectId: entryProjectId,
@@ -120,7 +176,10 @@ Panel {
       snapshotToken: entrySnapshotToken,
       note: entryNoteField.text,
       duration: entryDurationField.text,
-      selectedDate: selectedDateKey
+      selectedDate: selectedDateKey,
+      entryDate: entryDateKey,
+      originalDate: entryOriginalDateKey,
+      dirty: entryDraftDirty
     })
   }
 
@@ -133,7 +192,13 @@ Panel {
 
   function startShortcut(shortcut) {
     if (!timeTracking || !shortcut) return
-    if (timeTracking.activeTimer) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
+    var active = timeTracking.activeTimer
+    var sameShortcut = active && String(active.projectId) === String(shortcut.projectId)
+      && String(active.serviceId) === String(shortcut.serviceId)
+    if (sameShortcut) {
+      if (active.running) timeTracking.pause()
+      else timeTracking.resume()
+    } else if (active) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
     else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
   }
 
@@ -148,29 +213,35 @@ Panel {
     editingEntryId = "new"
     entryProjectId = project ? String(project.id) : ""
     entryServiceId = projectServiceId(project) === null ? "" : String(projectServiceId(project))
+    entryDateKey = selectedDateKey
+    entryOriginalDateKey = ""
+    entryDraftDirty = true
     confirmingDelete = false
     entrySnapshotToken = ""
     entryNoteField.text = ""
     entryDurationField.text = "00:00"
-    persistEntryDraft()
+    persistEntryDraft(true)
   }
 
   function beginEditEntry(entry) {
     editingEntryId = String(entry.id)
-    entryProjectId = String(entry.projectId !== undefined ? entry.projectId : entry.project_id)
-    entryServiceId = String(entry.serviceId !== undefined ? entry.serviceId : entry.service_id)
+    entryProjectId = String(entry.projectId === null ? "" : entry.projectId)
+    entryServiceId = String(entry.serviceId === null ? "" : entry.serviceId)
+    entryDateKey = String(entry.localDate || selectedDateKey)
+    entryOriginalDateKey = entryDateKey
+    entryDraftDirty = false
     confirmingDelete = false
     entrySnapshotToken = String(entry.snapshotToken || "")
     entryNoteField.text = String(entry.note || "")
-    entryDurationField.text = Model.formatDuration(entry.durationSeconds !== undefined ? entry.durationSeconds : entry.duration || 0)
-    persistEntryDraft()
+    entryDurationField.text = Model.formatDuration(entry.durationSeconds || 0)
+    persistEntryDraft(false)
   }
 
   function saveEntry() {
     var seconds = Model.parseDurationInput(entryDurationField.text)
-    if (seconds === null || entryProjectId === "" || !timeTracking) return
+    if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey) || !timeTracking) return
     var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
-    if (editingEntryId === "new") fields.startedAt = selectedDateKey + "T12:00:00"
+    if (editingEntryId === "new" || entryDateKey !== entryOriginalDateKey) fields.localDate = entryDateKey
     if (editingEntryId === "new") timeTracking.createEntry(fields)
     else timeTracking.updateEntry(editingEntryId, fields, entrySnapshotToken)
   }
@@ -189,12 +260,13 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: noteField.activeFocus || durationField.activeFocus || searchField.activeFocus
+      blocked: noteField.activeFocus || durationField.activeFocus || searchField.activeFocus || entryNoteField.activeFocus || entryDurationField.activeFocus || entryDateField.activeFocus || root.confirmingDelete
       onCloseRequested: root.close()
+      onMoveRequested: function(dx, dy) { root.moveKeyboardCursor(dx, dy) }
+      onActivateRequested: root.activateKeyboardCursor()
+      onDeleteRequested: root.deleteKeyboardSelection()
       onTabRequested: function(direction) {
-        var tabs = ["timer", "projects", "calendar"]
-        var index = tabs.indexOf(root.tab)
-        root.tab = tabs[(index + (direction > 0 ? 1 : 2)) % 3]
+        root.switchTab(direction)
       }
 
       Column {
@@ -254,6 +326,18 @@ Panel {
             }
             Text {
               width: parent.width
+              text: {
+                if (!root.timeTracking || !root.timeTracking.activeTimer) return ""
+                var project = root.projectById(root.timeTracking.activeTimer.projectId)
+                return project ? String(project.clientName || "Internal") + " · " + String(project.title || "Project") : ""
+              }
+              color: Qt.darker(root.foreground, 1.25)
+              font.family: root.fontFamily
+              horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideRight
+            }
+            Text {
+              width: parent.width
               text: root.timeTracking && root.timeTracking.activeTimer ? String(root.timeTracking.activeTimer.note || "Untitled work") : "Choose a project to begin"
               color: Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
@@ -265,7 +349,7 @@ Panel {
               width: parent.width
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "Notes"
-              onTextEdited: root.persistTimerDraft()
+              onTextEdited: root.persistTimerNoteDraft()
               onEditingFinished: if (root.timeTracking && enabled && text !== String(root.timeTracking.activeTimer.note || "")) root.timeTracking.updateTimerNote(text)
             }
             TextField {
@@ -273,25 +357,31 @@ Panel {
               width: parent.width
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "HH:MM or HH:MM:SS"
-              onTextEdited: root.persistTimerDraft()
+              onTextEdited: root.persistTimerDurationDraft()
               onAccepted: {
                 var seconds = Model.parseDurationInput(text)
                 if (seconds !== null && root.timeTracking) root.timeTracking.correctDuration(seconds)
+              }
+              onEditingFinished: {
+                var seconds = Model.parseDurationInput(text)
+                if (seconds !== null && root.timeTracking && !root.timeTracking.busy) root.timeTracking.correctDuration(seconds)
+                else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
               }
             }
             Row {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(8)
               ActionButton {
+                selected: root.tab === "timer" && root.keyboardCursor === 0
                 label: root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"
-                enabled: root.timeTracking && root.timeTracking.activeTimer && !root.timeTracking.busy
+                enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: {
                   if (root.timeTracking.activeTimer.running) root.timeTracking.pause()
                   else root.timeTracking.resume()
                 }
               }
-              ActionButton { label: "Log"; enabled: root.timeTracking && root.timeTracking.activeTimer && !root.timeTracking.busy; onTriggered: root.timeTracking.logTimer() }
-              ActionButton { label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
+              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 1; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
+              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 2; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
             }
             Text {
               visible: root.timeTracking && root.timeTracking.lastError !== ""
@@ -338,13 +428,16 @@ Panel {
                   model: root.projectShortcuts
                   Rectangle {
                     required property var modelData
+                    required property int index
                     width: projectColumn.width
                     height: Style.space(46)
                     radius: Style.cornerRadius
-                    color: projectMouse.containsMouse ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
+                    color: projectMouse.containsMouse || root.keyboardCursor === index ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
+                    border.width: root.keyboardCursor === index ? 1 : 0
+                    border.color: Color.accent
                     Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(60); text: String(modelData.project.clientName || "") + (modelData.project.clientName ? " · " : "") + String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); elide: Text.ElideRight; color: root.foreground; font.family: root.fontFamily }
                     Text { anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
-                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.startShortcut(modelData) }
+                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; enabled: root.canMutate; cursorShape: Qt.PointingHandCursor; onClicked: root.startShortcut(modelData) }
                   }
                 }
               }
@@ -376,14 +469,14 @@ Panel {
                   color: root.selectedDateKey === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, modelData.inMonth ? 0.07 : 0.025)
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatDuration((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0).replace(/^00:/, "") : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectedDateKey = modelData.key }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.selectedDateKey = modelData.key; root.keyboardCursor = 0 } }
                 }
               }
             }
             Row {
               width: parent.width
               Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              ActionButton { id: addEntryButton; label: "+ Entry"; onTriggered: root.beginAddEntry() }
+              ActionButton { id: addEntryButton; selected: root.tab === "calendar" && root.keyboardCursor === 0; label: "+ Entry"; onTriggered: root.beginAddEntry() }
             }
             Flickable {
               visible: root.editingEntryId === ""
@@ -399,9 +492,12 @@ Panel {
                   model: root.dayEntries
                   Rectangle {
                     required property var modelData
+                    required property int index
                     width: entryColumn.width
                     height: Style.space(38)
                     color: "transparent"
+                    border.width: root.keyboardCursor === index + 1 ? 1 : 0
+                    border.color: Color.accent
                     Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(100); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
                     Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.beginEditEntry(modelData) }
@@ -415,8 +511,9 @@ Panel {
               width: parent.width
               spacing: Style.space(7)
               Text { text: root.editingEntryId === "new" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft() }
-              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(); onAccepted: root.saveEntry() }
+              TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
+              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
+              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
               Text { text: "Project and service"; color: Qt.darker(root.foreground, 1.3); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
               Flickable {
                 width: parent.width
@@ -435,29 +532,36 @@ Panel {
                       height: Style.space(30)
                       radius: Style.cornerRadius
                       color: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
-                      Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft() } }
+                      Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                      MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) } }
                     }
                   }
                 }
               }
               Row {
                 spacing: Style.space(8)
-                ActionButton { label: "Save"; enabled: Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== ""; onTriggered: root.saveEntry() }
+                ActionButton { label: "Save"; enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey); onTriggered: root.saveEntry() }
                 ActionButton { label: "Cancel"; onTriggered: { root.editingEntryId = ""; root.confirmingDelete = false; if (root.timeTracking) root.timeTracking.clearEntryDraft() } }
                 ActionButton {
                   visible: root.editingEntryId !== "new"
+                  enabled: root.canMutate
                   label: root.confirmingDelete ? "Delete now" : "Delete"
                   onTriggered: {
                     if (!root.confirmingDelete) root.confirmingDelete = true
                     else {
-                      root.timeTracking.deleteEntry(root.editingEntryId)
+                      root.timeTracking.deleteEntry(root.editingEntryId, root.entrySnapshotToken)
                       root.editingEntryId = ""
                       root.confirmingDelete = false
                       root.timeTracking.clearEntryDraft()
                     }
                   }
                 }
+              }
+              Row {
+                visible: root.timeTracking && root.timeTracking.conflictPending
+                spacing: Style.space(8)
+                ActionButton { label: "Reload remote entry"; onTriggered: root.timeTracking.resolveConflictReload() }
+                ActionButton { label: "Apply my entry"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
               }
             }
           }
@@ -469,11 +573,12 @@ Panel {
   component ActionButton: Rectangle {
     id: action
     property string label: ""
+    property bool selected: false
     signal triggered()
     implicitWidth: Math.max(Style.space(54), actionLabel.implicitWidth + Style.space(20))
     implicitHeight: Style.space(32)
     radius: Style.cornerRadius
-    color: actionMouse.containsMouse ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
+    color: actionMouse.containsMouse || selected ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
     opacity: enabled ? 1 : 0.45
     Text { id: actionLabel; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: root.fontFamily }
     MouseArea { id: actionMouse; anchors.fill: parent; hoverEnabled: true; enabled: action.enabled; cursorShape: Qt.PointingHandCursor; onClicked: action.triggered() }
@@ -487,6 +592,9 @@ Panel {
       if (!root.timeTracking || String((root.timeTracking.entryDraft || {}).mode || "") !== "") return
       root.editingEntryId = ""
       root.confirmingDelete = false
+    }
+    function onDraftTimerDurationDirtyChanged() {
+      if (root.timeTracking && !root.timeTracking.draftTimerDurationDirty) root.hydrateDrafts()
     }
   }
 
