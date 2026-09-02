@@ -88,6 +88,16 @@ test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('90'), null)
 })
 
+test('chooses a readable theme role for opaque selected surfaces', () => {
+  const selectedFill = { r: 0x00 / 255, g: 0xc6 / 255, b: 0xc2 / 255, a: 1 }
+  const popupText = { r: 0x92 / 255, g: 0xb2 / 255, b: 0xb3 / 255, a: 1 }
+  const popupBackground = { r: 0x1d / 255, g: 0x3f / 255, b: 0x45 / 255, a: 1 }
+
+  assert.equal(model.readableContentRole(popupText, popupBackground, selectedFill), 'background')
+  assert.ok(model.contrastRatio(popupBackground, selectedFill) >= 4.5)
+  assert.ok(model.contrastRatio(popupText, selectedFill) < 1.1)
+})
+
 test('filters projects and orders one day of entries chronologically', () => {
   const projects = [{ title: 'Website', clientName: 'Acme' }, { title: 'Internal', clientName: '' }]
   assert.deepEqual(model.searchProjects(projects, 'acme'), [projects[0]])

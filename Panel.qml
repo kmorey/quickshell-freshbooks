@@ -55,6 +55,18 @@ Panel {
   property string entrySnapshotToken: ""
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property color selectedContentColor: Model.readableContentRole(
+    foreground,
+    Color.background,
+    Style.selectedFillFor(foreground, Color.accent),
+    Color.popups.background
+  ) === "background" ? Color.background : foreground
+  readonly property color hoverContentColor: Model.readableContentRole(
+    foreground,
+    Color.background,
+    Style.hoverFillFor(foreground, Color.accent),
+    Color.popups.background
+  ) === "background" ? Color.background : foreground
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
   readonly property bool canMutate: timeTracking && !timeTracking.busy && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
 
@@ -529,16 +541,27 @@ Panel {
           Repeater {
             model: ["timer", "projects", "calendar"]
             Button {
+              id: tabButton
               required property string modelData
               width: (parent.width - Style.space(12)) / 3
               height: Style.space(34)
-              text: modelData.toUpperCase()
-              selected: root.tab === modelData
+              active: root.tab === modelData
               bordered: true
               foreground: root.foreground
               accent: Color.accent
               fontFamily: root.fontFamily
               fontSize: Style.font.bodySmall
+              Text {
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: tabButton.modelData.toUpperCase()
+                color: tabButton.hot
+                  ? root.hoverContentColor
+                  : (tabButton.active ? root.selectedContentColor : root.foreground)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: tabButton.active
+              }
               onClicked: {
                 root.tab = modelData
                 root.keyboardCursor = 0
@@ -682,8 +705,12 @@ Panel {
                 Repeater {
                   model: root.projectShortcuts
                   CursorSurface {
+                    id: projectRow
                     required property var modelData
                     required property int index
+                    readonly property color contentColor: hasCursor
+                      ? root.hoverContentColor
+                      : (current ? root.selectedContentColor : root.foreground)
                     width: projectColumn.width
                     height: Style.space(58)
                     hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === index
@@ -720,7 +747,7 @@ Panel {
                         width: parent.width
                         text: String(modelData.project.title || modelData.project.name || "Project")
                         elide: Text.ElideRight
-                        color: root.foreground
+                        color: projectRow.contentColor
                         font.family: root.fontFamily
                       }
                       Text {
@@ -729,7 +756,9 @@ Panel {
                         text: String(modelData.project.clientName || "Internal")
                           + (modelData.serviceName ? " · " + modelData.serviceName : "")
                         elide: Text.ElideRight
-                        color: Qt.darker(root.foreground, 1.25)
+                        color: projectRow.current || projectRow.hasCursor
+                          ? projectRow.contentColor
+                          : Qt.darker(root.foreground, 1.25)
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
                       }
@@ -744,8 +773,8 @@ Panel {
                         && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
                         && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊"
                       tooltipText: iconText === "󰏤" ? "Pause timer" : "Start timer"
-                      foreground: Color.accent
-                      hoverColor: Color.accent
+                      foreground: projectRow.contentColor
+                      hoverColor: projectRow.contentColor
                       fontFamily: root.fontFamily
                       fontSize: Style.font.title
                       enabled: root.canMutate
@@ -815,7 +844,11 @@ Panel {
               Repeater {
                 model: root.monthCells
                 CursorSurface {
+                  id: dayCell
                   required property var modelData
+                  readonly property color contentColor: hasCursor
+                    ? root.hoverContentColor
+                    : (current ? root.selectedContentColor : root.foreground)
                   width: (calendarGrid.width - calendarGrid.spacing * 6) / 7
                   height: Style.space(45)
                   hasCursor: root.cursorActive && root.calendarGridFocused && root.calendarCursorDateKey === modelData.key
@@ -823,9 +856,9 @@ Panel {
                   bordered: root.todayDateKey === modelData.key
                   foreground: root.foreground
                   accent: Color.accent
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatHoursMinutes((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0) : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: root.foreground; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: dayCell.current || dayCell.hasCursor ? dayCell.contentColor : (modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7)); font.family: root.fontFamily }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatHoursMinutes((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0) : ""; color: dayCell.contentColor; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                  Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: dayCell.contentColor; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
                   MouseArea {
                     anchors.fill: parent
                     hoverEnabled: true
@@ -864,15 +897,17 @@ Panel {
                 Repeater {
                   model: root.dayEntries
                   CursorSurface {
+                    id: entryRow
                     required property var modelData
                     required property int index
+                    readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
                     width: entryColumn.width
                     height: Style.space(38)
                     hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index + 1
                     foreground: root.foreground
                     accent: Color.accent
-                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: root.foreground; elide: Text.ElideRight; font.family: root.fontFamily }
-                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: root.foreground; font.family: root.fontFamily }
+                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
+                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
                     MouseArea {
                       anchors.fill: parent
                       hoverEnabled: true
@@ -915,6 +950,9 @@ Panel {
                       id: entryProjectChoice
                       required property var modelData
                       property bool pointerHot: false
+                      readonly property color contentColor: hasCursor
+                        ? root.hoverContentColor
+                        : (current ? root.selectedContentColor : root.foreground)
                       width: entryProjectColumn.width
                       height: Style.space(30)
                       activeFocusOnTab: true
@@ -923,7 +961,7 @@ Panel {
                       bordered: true
                       foreground: root.foreground
                       accent: Color.accent
-                      Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                      Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: entryProjectChoice.contentColor; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
                       MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true

@@ -159,4 +159,8 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /PanelSectionHeader\s*\{/)
   assert.ok((panel.match(/CursorSurface\s*\{/g) || []).length >= 3)
   assert.doesNotMatch(panel, /root\.tab === modelData \? Color\.accent/)
+  assert.match(panel, /readonly property color selectedContentColor:\s*Model\.readableContentRole/)
+  assert.match(panel, /active:\s*root\.tab === modelData/)
+  assert.doesNotMatch(panel, /selected:\s*root\.tab === modelData/)
+  assert.ok((panel.match(/root\.selectedContentColor/g) || []).length >= 4)
 })

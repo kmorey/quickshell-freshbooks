@@ -13,6 +13,61 @@ function integerSeconds(value) {
   return Math.max(0, Math.round(finiteNumber(value, 0)))
 }
 
+function colorChannel(value) {
+  return Math.max(0, Math.min(1, finiteNumber(value, 0)))
+}
+
+function normalizedColor(value) {
+  value = value || {}
+  return {
+    r: colorChannel(value.r),
+    g: colorChannel(value.g),
+    b: colorChannel(value.b),
+    a: value.a === undefined ? 1 : colorChannel(value.a)
+  }
+}
+
+function compositeColor(over, under) {
+  var foreground = normalizedColor(over)
+  var background = normalizedColor(under)
+  var alpha = foreground.a + background.a * (1 - foreground.a)
+  if (alpha <= 0) return { r: 0, g: 0, b: 0, a: 0 }
+  return {
+    r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
+    g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
+    b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
+    a: alpha
+  }
+}
+
+function linearColorChannel(value) {
+  var channel = colorChannel(value)
+  return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4)
+}
+
+function colorLuminance(value) {
+  var color = normalizedColor(value)
+  return 0.2126 * linearColorChannel(color.r)
+    + 0.7152 * linearColorChannel(color.g)
+    + 0.0722 * linearColorChannel(color.b)
+}
+
+function contrastRatio(first, second) {
+  var firstLuminance = colorLuminance(first)
+  var secondLuminance = colorLuminance(second)
+  return (Math.max(firstLuminance, secondLuminance) + 0.05)
+    / (Math.min(firstLuminance, secondLuminance) + 0.05)
+}
+
+function readableContentRole(foreground, background, fill, surfaceBackground) {
+  var backgroundCandidate = compositeColor(background, { r: 0, g: 0, b: 0, a: 1 })
+  var surfaceBase = compositeColor(surfaceBackground || background, backgroundCandidate)
+  var surface = compositeColor(fill, surfaceBase)
+  return contrastRatio(backgroundCandidate, surface) > contrastRatio(foreground, surface)
+    ? "background"
+    : "foreground"
+}
+
 function pad2(value) {
   var number = Math.round(Number(value))
   return (number < 10 ? "0" : "") + number
@@ -326,6 +381,7 @@ if (typeof module !== "undefined") module.exports = {
   addDays: addDays,
   aggregateEntries: aggregateEntries,
   calendarMonth: calendarMonth,
+  contrastRatio: contrastRatio,
   dateKey: dateKey,
   elapsedSeconds: elapsedSeconds,
   entryDateKey: entryDateKey,
@@ -337,6 +393,7 @@ if (typeof module !== "undefined") module.exports = {
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
   recentShortcutOrder: recentShortcutOrder,
+  readableContentRole: readableContentRole,
   recordSnapshotChanged: recordSnapshotChanged,
   searchProjects: searchProjects,
   searchShortcuts: searchShortcuts,
