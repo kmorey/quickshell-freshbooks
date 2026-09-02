@@ -26,9 +26,13 @@ The FreshBooks web UI starts a timer in two Time Entry requests:
 
 Creating a public Time Entry with `is_logged=false` but without `timer: {}` produced an unlogged entry with no timer identity. The current CLI's assumption that any unlogged entry is a genuine running timer is therefore false for the observed account. A genuine start must request timer creation explicitly, retain the authoritative response, and complete the assignment update before reporting success.
 
+## Pause request shape
+
+The FreshBooks web UI pauses a running timer with one `PUT /comments/business/<ID>/time_entries/<ID>` against the open Timer Segment. The payload retains the segment's timer identity, authenticated identity, project, service, note, flags, start timestamps, and timezone, and replaces `duration: null` with the elapsed whole-second duration. It does not send an explicit `is_running` field. A segment with a fixed duration is closed; the logical timer is paused when it has no open segment.
+
 ## Public Time Entry endpoint limitations
 
-A public Time Entry `PUT` carrying the existing timer identity and `is_running=true` was accepted but did not resume a paused web-created timer. A similar pause-shaped update on an API-created unlogged entry was accepted without producing a remotely paused state. Although the timer-start request is now identified, pause and resume still require their web request shapes to be safely captured and validated before the released CLI claims those capabilities.
+A public Time Entry `PUT` carrying the existing timer identity and `is_running=true` was accepted but did not resume a paused web-created timer. An earlier update on an API-created unlogged entry without a genuine timer identity could not produce a remotely paused state. The genuine pause request is now identified as closing the open Timer Segment with a concrete duration; resume still requires its web request shape to be safely captured and validated before the released CLI claims that capability.
 
 Updating the duration of an API-created unlogged entry persisted the number but did not prove a Duration Correction on a genuine timer. For a genuine running timer, the web UI's correction changed the current segment's start anchor while preserving completed segment durations. A CLI correction should work against the grouped logical timer and adopt the server-reread aggregate.
 
@@ -45,7 +49,7 @@ The controlled scripts tracked every created entry and deleted it in `finally`. 
 
 ## Remaining characterization blocker
 
-Capture the FreshBooks web request method, path, and non-secret payload shape for pausing and resuming a genuine timer, including whether either action creates a new segment. Do not capture or publish cookies, authorization headers, CSRF values, live identifiers, or full HAR files. Validate the discovered operations with disposable data before adding them to `freshbooks-cli`.
+Capture the FreshBooks web request method, path, and non-secret payload shape for resuming a genuine timer, including how it creates the next Timer Segment. Do not capture or publish cookies, authorization headers, CSRF values, live identifiers, or full HAR files. Validate the observed start, pause, and resume operations with disposable data before adding them to `freshbooks-cli`.
 
 ## Primary references
 
