@@ -23,6 +23,7 @@ Item {
   property string lastError: ""
   property bool outcomeUnknown: false
   property bool snapshotStale: true
+  property bool conflictPending: false
   property double lastRefreshMs: 0
   property var visibleConsumers: ({})
   property string lastEntryFrom: ""
@@ -38,6 +39,13 @@ Item {
   property var _current: null
   property int _requestSerial: 0
   property bool _refreshQueued: false
+  property var _conflictRequest: null
+
+  function withSnapshot(argv, record) {
+    var result = argv.slice()
+    if (record && String(record.snapshotToken || "") !== "") result.push("--snapshot", String(record.snapshotToken))
+    return result
+  }
 
   function useAdapter(adapter) {
     if (_current !== null) return false
@@ -107,27 +115,27 @@ Item {
 
   function pause() {
     if (!activeTimer) return
-    enqueue("pause", ["timer", "pause", "--id", String(activeTimer.id)], { timerId: activeTimer.id }, true)
+    enqueue("pause", withSnapshot(["timer", "pause", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
   }
 
   function resume() {
     if (!activeTimer) return
-    enqueue("resume", ["timer", "resume", "--id", String(activeTimer.id)], { timerId: activeTimer.id }, true)
+    enqueue("resume", withSnapshot(["timer", "resume", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
   }
 
   function correctDuration(seconds) {
     if (!activeTimer) return
-    enqueue("correctDuration", ["timer", "correct", "--id", String(activeTimer.id), "--duration", String(Math.max(0, Math.round(Number(seconds) || 0)))], { timerId: activeTimer.id }, true)
+    enqueue("correctDuration", withSnapshot(["timer", "correct", "--id", String(activeTimer.id), "--duration", String(Math.max(0, Math.round(Number(seconds) || 0)))], activeTimer), { timerId: activeTimer.id }, true)
   }
 
   function updateTimerNote(note) {
     if (!activeTimer) return
-    enqueue("updateTimerNote", ["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")], { timerId: activeTimer.id }, true)
+    enqueue("updateTimerNote", withSnapshot(["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")], activeTimer), { timerId: activeTimer.id }, true)
   }
 
   function logTimer() {
     if (!activeTimer) return
-    enqueue("log", ["timer", "log", "--id", String(activeTimer.id)], { timerId: activeTimer.id }, true)
+    enqueue("log", withSnapshot(["timer", "log", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
   }
 
   function switchTimer(projectId, serviceId) {
@@ -135,6 +143,7 @@ Item {
     var argv = ["timer", "switch", "--project", String(projectId)]
     if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
     if (activeTimer) argv.push("--id", String(activeTimer.id))
+    argv = withSnapshot(argv, activeTimer)
     enqueue("switch", argv, { projectId: projectId }, true)
   }
 
@@ -160,8 +169,10 @@ Item {
     enqueue("createEntry", appendFieldArguments(["time", "add"], fields), fields || {}, true)
   }
 
-  function updateEntry(entryId, fields) {
-    enqueue("updateEntry", appendFieldArguments(["time", "update", String(entryId)], fields), fields || {}, true)
+  function updateEntry(entryId, fields, snapshotToken) {
+    var argv = appendFieldArguments(["time", "update", String(entryId)], fields)
+    if (String(snapshotToken || "") !== "") argv.push("--snapshot", String(snapshotToken))
+    enqueue("updateEntry", argv, fields || {}, true)
   }
 
   function deleteEntry(entryId) {
@@ -180,6 +191,27 @@ Item {
     })
     _queue = next
     pump()
+  }
+
+  function resolveConflictReload() {
+    conflictPending = false
+    _conflictRequest = null
+    clearError()
+    refreshAll(lastEntryFrom, lastEntryTo)
+  }
+
+  function resolveConflictApplyMine() {
+    if (!_conflictRequest) return
+    var request = _conflictRequest
+    var argv = []
+    for (var i = 0; i < request.argv.length; i++) {
+      if (request.argv[i] === "--snapshot") { i += 1; continue }
+      argv.push(request.argv[i])
+    }
+    conflictPending = false
+    _conflictRequest = null
+    clearError()
+    enqueue(request.intent, argv, request.payload, true)
   }
 
   function pump() {
@@ -221,14 +253,20 @@ Item {
       lastErrorCode = String(error.code || "UNKNOWN_ERROR")
       lastError = String(error.message || "FreshBooks operation failed")
       outcomeUnknown = error.outcomeUnknown === true
+      if (lastErrorCode === "REMOTE_CHANGED") {
+        conflictPending = true
+        _conflictRequest = completed
+        refresh()
+      }
     } else {
-      clearError()
+      phase = "ready"
+      if (!conflictPending) clearError()
       if (completed.intent === "refreshTimers") adoptTimerData(data)
       else if (completed.intent === "refreshProjects") projects = Array.isArray(data) ? data : []
       else if (completed.intent === "refreshEntries") entries = Array.isArray(data) ? data : []
       else reconcile = true
     }
-    if (phase !== "error") phase = timerMode === "multiple" ? "ambiguous" : "ready"
+    if (phase !== "error") phase = conflictPending ? "conflict" : (timerMode === "multiple" ? "ambiguous" : "ready")
     // Mutation responses are authoritative, but their exact normalized shape
     // belongs to the CLI contract. Reconcile the whole timer set before the
     // next view treats it as current.

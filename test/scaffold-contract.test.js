@@ -72,4 +72,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /deleteEntry/)
   assert.match(panel, /confirmingDelete/)
   assert.match(panel, /projectShortcuts/)
+  assert.match(panel, /Apply mine/)
+  assert.match(panel, /resolveConflictReload/)
+  assert.match(panel, /resolveConflictApplyMine/)
 })

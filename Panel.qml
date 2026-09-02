@@ -30,6 +30,7 @@ Panel {
   property string entryProjectId: ""
   property string entryServiceId: ""
   property bool confirmingDelete: false
+  property string entrySnapshotToken: ""
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
@@ -104,6 +105,7 @@ Panel {
     entryProjectId = project ? String(project.id) : ""
     entryServiceId = projectServiceId(project) === null ? "" : String(projectServiceId(project))
     confirmingDelete = false
+    entrySnapshotToken = ""
     entryNoteField.text = ""
     entryDurationField.text = "00:00"
   }
@@ -113,6 +115,7 @@ Panel {
     entryProjectId = String(entry.projectId !== undefined ? entry.projectId : entry.project_id)
     entryServiceId = String(entry.serviceId !== undefined ? entry.serviceId : entry.service_id)
     confirmingDelete = false
+    entrySnapshotToken = String(entry.snapshotToken || "")
     entryNoteField.text = String(entry.note || "")
     entryDurationField.text = Model.formatDuration(entry.durationSeconds !== undefined ? entry.durationSeconds : entry.duration || 0)
   }
@@ -123,7 +126,7 @@ Panel {
     var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
     if (editingEntryId === "new") fields.startedAt = selectedDateKey + "T12:00:00"
     if (editingEntryId === "new") timeTracking.createEntry(fields)
-    else timeTracking.updateEntry(editingEntryId, fields)
+    else timeTracking.updateEntry(editingEntryId, fields, entrySnapshotToken)
     editingEntryId = ""
   }
 
@@ -252,6 +255,23 @@ Panel {
               text: root.timeTracking ? root.timeTracking.lastError : ""
               color: Color.urgent
               font.family: root.fontFamily
+            }
+            Row {
+              visible: root.timeTracking && root.timeTracking.conflictPending
+              spacing: Style.space(8)
+              ActionButton {
+                label: "Reload"
+                onTriggered: {
+                  root.timeTracking.resolveConflictReload()
+                  Qt.callLater(function() {
+                    if (root.timeTracking.activeTimer) {
+                      noteField.text = String(root.timeTracking.activeTimer.note || "")
+                      durationField.text = Model.formatDuration(root.timeTracking.activeTimer.elapsedSeconds)
+                    }
+                  })
+                }
+              }
+              ActionButton { label: "Apply mine"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
             }
           }
 
