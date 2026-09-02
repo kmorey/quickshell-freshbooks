@@ -126,7 +126,7 @@ Item {
       failed(requestId, {
         code: "CLI_TIMEOUT",
         message: "freshbooks-cli did not finish before the timeout",
-        outcomeUnknown: true
+        outcomeUnknown: request && request.mutation === true
       })
       return
     }

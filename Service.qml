@@ -55,6 +55,9 @@ Item {
   property bool _projectsConfirmed: false
   property bool _recentConfirmed: false
   property string _unknownRefreshIntent: ""
+  property var _unknownRequest: null
+  property string _unknownOriginalFrom: ""
+  property string _unknownOriginalTo: ""
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function diagnosticsCompatible(value) {
@@ -122,6 +125,8 @@ Item {
     lastErrorCode = ""
     lastError = ""
     outcomeUnknown = false
+    _unknownRefreshIntent = ""
+    _unknownRequest = null
   }
 
   function refresh() {
@@ -220,7 +225,12 @@ Item {
   }
 
   function createEntry(fields) {
-    enqueue("createEntry", appendFieldArguments(["time", "add"], fields), fields || {}, true)
+    var payload = {}
+    var values = fields || {}
+    for (var key in values) payload[key] = values[key]
+    payload.knownEntryIds = []
+    for (var i = 0; i < entries.length; i++) payload.knownEntryIds.push(String(entries[i].id))
+    enqueue("createEntry", appendFieldArguments(["time", "add"], fields), payload, true)
   }
 
   function updateEntry(entryId, fields, snapshotToken) {
@@ -350,6 +360,42 @@ Item {
     entries = received
   }
 
+  function entryMatchesFields(entry, fields) {
+    var values = fields || {}
+    if (values.projectId !== undefined && String(entry.projectId) !== String(values.projectId)) return false
+    if (values.serviceId !== undefined && String(entry.serviceId) !== String(values.serviceId)) return false
+    if (values.durationSeconds !== undefined && Number(entry.durationSeconds) !== Number(values.durationSeconds)) return false
+    if (values.note !== undefined && String(entry.note || "") !== String(values.note || "")) return false
+    if (values.localDate !== undefined && String(entry.localDate) !== String(values.localDate)) return false
+    return true
+  }
+
+  function reconcileUnknownEntry(data) {
+    var request = _unknownRequest
+    if (!request) return
+    var received = Array.isArray(data) ? data : []
+    if (request.intent === "createEntry") {
+      var known = request.payload.knownEntryIds || []
+      for (var i = 0; i < received.length; i++) {
+        if (known.indexOf(String(received[i].id)) === -1 && entryMatchesFields(received[i], request.payload)) {
+          clearEntryDraft()
+          break
+        }
+      }
+    } else if (request.intent === "updateEntry") {
+      for (var j = 0; j < received.length; j++) {
+        if (String(received[j].id) === String(request.argv[2]) && entryMatchesFields(received[j], request.payload)) {
+          clearEntryDraft()
+          break
+        }
+      }
+    } else if (request.intent === "deleteEntry") {
+      var found = false
+      for (var k = 0; k < received.length; k++) if (String(received[k].id) === String(request.payload.entryId)) found = true
+      if (!found) clearEntryDraft()
+    }
+  }
+
   function finishRequest(requestId, data, error) {
     if (!_current || String(_current.id) !== String(requestId)) return
     var completed = _current
@@ -372,7 +418,12 @@ Item {
       if (lastErrorCode === "TIMER_SWITCH_PARTIAL") refreshAll(lastEntryFrom, lastEntryTo)
       if (error.outcomeUnknown === true) {
         _unknownRefreshIntent = completed.intent.indexOf("Entry") !== -1 ? "refreshEntries" : "refreshTimers"
-        if (_unknownRefreshIntent === "refreshEntries") refreshEntries(lastEntryFrom, lastEntryTo)
+        _unknownRequest = completed
+        _unknownOriginalFrom = lastEntryFrom
+        _unknownOriginalTo = lastEntryTo
+        if (_unknownRefreshIntent === "refreshEntries" && completed.intent === "createEntry" && String(completed.payload.localDate || "") !== "")
+          refreshEntries(completed.payload.localDate, completed.payload.localDate)
+        else if (_unknownRefreshIntent === "refreshEntries") refreshEntries(lastEntryFrom, lastEntryTo)
         else refresh()
       }
       if (error.outcomeUnknown === true) {
@@ -388,6 +439,9 @@ Item {
         if (outcomeUnknown && _unknownRefreshIntent === "refreshTimers" && !conflictPending) {
           outcomeUnknown = false
           _unknownRefreshIntent = ""
+          _unknownRequest = null
+          _unknownOriginalFrom = ""
+          _unknownOriginalTo = ""
         }
       }
       else if (completed.intent === "refreshProjects") {
@@ -408,10 +462,19 @@ Item {
       }
       else if (completed.intent === "refreshDiagnostics") diagnostics = data || ({})
       else if (completed.intent === "refreshEntries") {
+        if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries") reconcileUnknownEntry(data)
         adoptEntryData(data)
         if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries" && !conflictPending) {
           outcomeUnknown = false
           _unknownRefreshIntent = ""
+          _unknownRequest = null
+          if (_unknownOriginalFrom !== lastEntryFrom || _unknownOriginalTo !== lastEntryTo) {
+            lastEntryFrom = _unknownOriginalFrom
+            lastEntryTo = _unknownOriginalTo
+            refreshEntries(lastEntryFrom, lastEntryTo)
+          }
+          _unknownOriginalFrom = ""
+          _unknownOriginalTo = ""
         }
       }
       else {
