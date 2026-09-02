@@ -33,7 +33,7 @@ BarWidget {
 
   function boundedStatus() {
     return JSON.stringify({
-      ready: root.timeTracking !== null,
+      ready: root.timeTracking ? root.timeTracking.diagnosticsReady === true : false,
       opened: root.opened,
       timerMode: root.timerMode,
       running: root.activeTimer ? root.activeTimer.running === true : false,

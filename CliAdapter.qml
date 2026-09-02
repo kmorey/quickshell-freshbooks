@@ -59,30 +59,46 @@ Item {
     return true
   }
 
+  function validId(value) { return (typeof value === "number" && isFinite(value)) || (typeof value === "string" && value !== "") }
+  function validTimer(record) {
+    return validRecord(record, ["id", "running", "elapsedSeconds", "snapshotToken"])
+      && validId(record.id) && typeof record.running === "boolean"
+      && typeof record.elapsedSeconds === "number" && typeof record.snapshotToken === "string"
+  }
+  function validEntry(record) {
+    return validRecord(record, ["id", "localDate", "durationSeconds", "snapshotToken"])
+      && validId(record.id) && typeof record.localDate === "string"
+      && typeof record.durationSeconds === "number" && typeof record.snapshotToken === "string"
+  }
+
   function validData(request, data) {
     var intent = String(request && request.intent || "")
     if (intent === "refreshTimers") {
       if (!data || !Array.isArray(data.timers)) return false
       for (var i = 0; i < data.timers.length; i++)
-        if (!validRecord(data.timers[i], ["id", "running", "elapsedSeconds", "snapshotToken"])) return false
+        if (!validTimer(data.timers[i])) return false
     } else if (intent === "refreshProjects") {
       if (!Array.isArray(data)) return false
       for (var j = 0; j < data.length; j++)
-        if (!validRecord(data[j], ["id", "title", "clientName", "services"])) return false
+        if (!validRecord(data[j], ["id", "title", "clientName", "services"]) || !validId(data[j].id)
+            || typeof data[j].title !== "string" || typeof data[j].clientName !== "string" || !Array.isArray(data[j].services)) return false
     } else if (intent === "refreshEntries" || intent === "refreshRecentEntries") {
       if (!Array.isArray(data)) return false
       for (var k = 0; k < data.length; k++)
-        if (!validRecord(data[k], ["id", "localDate", "durationSeconds", "snapshotToken"])) return false
+        if (!validEntry(data[k])) return false
     } else if (intent === "refreshDiagnostics") {
-      return validRecord(data, ["version", "authenticated", "businessSelected", "capabilities"])
+      return validRecord(data, ["version", "authenticated", "businessSelected", "capabilities", "localDate"])
+        && typeof data.version === "string" && typeof data.authenticated === "boolean"
+        && typeof data.businessSelected === "boolean" && Array.isArray(data.capabilities)
+        && /^\d{4}-\d{2}-\d{2}$/.test(data.localDate)
     } else if (["start", "pause", "resume", "correctDuration", "updateTimerNote"].indexOf(intent) !== -1) {
-      return validRecord(data, ["id", "running", "elapsedSeconds", "snapshotToken"])
+      return validTimer(data)
     } else if (intent === "log") {
-      return validRecord(data, ["id", "durationSeconds", "snapshotToken", "timerId"])
+      return validEntry(data) && validId(data.timerId)
     } else if (intent === "switch") {
-      return validRecord(data, ["timer", "partial"]) && validRecord(data.timer, ["id", "running", "elapsedSeconds", "snapshotToken"])
+      return validRecord(data, ["timer", "partial"]) && typeof data.partial === "boolean" && validTimer(data.timer)
     } else if (intent === "createEntry" || intent === "updateEntry") {
-      return validRecord(data, ["id", "localDate", "durationSeconds", "snapshotToken"])
+      return validEntry(data)
     } else if (intent === "deleteEntry") {
       return validRecord(data, ["id", "deleted"])
     }
@@ -127,18 +143,20 @@ Item {
       failed(requestId, declared || {
         code: "CLI_EXIT",
         message: "freshbooks-cli exited with status " + exitCode,
-        exitCode: exitCode
+        exitCode: exitCode,
+        outcomeUnknown: request && request.mutation === true
       })
       return
     }
     if (!stdoutDocument) {
-      failed(requestId, { code: "INVALID_JSON", message: "freshbooks-cli returned invalid JSON" })
+      failed(requestId, { code: "INVALID_JSON", message: "freshbooks-cli returned invalid JSON", outcomeUnknown: request && request.mutation === true })
       return
     }
     if (stdoutDocument.schemaVersion !== 1) {
       failed(requestId, {
         code: "CLI_SCHEMA_MISMATCH",
-        message: "freshbooks-cli JSON schema is incompatible; version 0.2.0 or newer is required"
+        message: "freshbooks-cli JSON schema is incompatible; version 0.2.0 or newer is required",
+        outcomeUnknown: request && request.mutation === true
       })
       return
     }
@@ -147,7 +165,7 @@ Item {
       return
     }
     if (!validData(request, stdoutDocument.data)) {
-      failed(requestId, { code: "CLI_RECORD_SCHEMA_MISMATCH", message: "freshbooks-cli returned an incompatible record" })
+      failed(requestId, { code: "CLI_RECORD_SCHEMA_MISMATCH", message: "freshbooks-cli returned an incompatible record", outcomeUnknown: request && request.mutation === true })
       return
     }
     succeeded(requestId, stdoutDocument.data)

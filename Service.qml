@@ -44,6 +44,7 @@ Item {
   readonly property var state: Model.stateProjection({ timers: timers, projects: projects, entries: entries }, selectedTimerId)
   readonly property bool busy: _current !== null
   readonly property bool hasVisibleConsumers: Object.keys(visibleConsumers).length > 0
+  readonly property bool diagnosticsReady: diagnosticsCompatible(diagnostics)
 
   property var _queue: []
   property var _current: null
@@ -53,8 +54,18 @@ Item {
   property bool _draftConflict: false
   property bool _projectsConfirmed: false
   property bool _recentConfirmed: false
+  property string _unknownRefreshIntent: ""
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
+  function diagnosticsCompatible(value) {
+    var data = value || {}
+    var parts = String(data.version || "").split(".")
+    if (Number(parts[0] || 0) !== 0 || Number(parts[1] || 0) < 2) return false
+    if (!Array.isArray(data.capabilities)) return false
+    var required = ["projects", "time-entries", "timer-segments", "timer-switch", "snapshot-guards", "local-calendar", "bounded-history"]
+    for (var i = 0; i < required.length; i++) if (data.capabilities.indexOf(required[i]) === -1) return false
+    return true
+  }
   function clearEntryDraft() { stateData.entryDraft = ({}) }
   function clearTimerDraft() {
     stateData.timerId = ""
@@ -137,6 +148,7 @@ Item {
   }
 
   function refreshAll(fromDate, toDate) {
+    refreshDiagnostics()
     refresh()
     refreshProjects()
     refreshRecentEntries()
@@ -314,9 +326,11 @@ Item {
   function adoptEntryData(data) {
     var received = Array.isArray(data) ? data : []
     var draft = entryDraft || {}
-    var mode = String(draft.mode || "")
-    if (mode !== "" && mode !== "new" && draft.dirty === true
-        && Model.recordSnapshotChanged(received, mode, draft.snapshotToken)) {
+    var storedMode = String(draft.mode || "")
+    var mode = storedMode === "new" ? "create" : (storedMode === "create" || storedMode === "edit" ? storedMode : "edit")
+    var entryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
+    if (mode === "edit" && entryId !== "" && draft.dirty === true
+        && Model.recordSnapshotChanged(received, entryId, draft.snapshotToken)) {
       var fields = {
         durationSeconds: Model.parseDurationInput(String(draft.duration || "")),
         projectId: draft.projectId,
@@ -325,7 +339,7 @@ Item {
       }
       var draftDate = String(draft.entryDate || draft.selectedDate || "")
       if (draftDate !== String(draft.originalDate || draftDate)) fields.localDate = draftDate
-      var argv = appendFieldArguments(["time", "update", mode], fields)
+      var argv = appendFieldArguments(["time", "update", entryId], fields)
       argv.push("--snapshot", String(draft.snapshotToken))
       conflictPending = true
       _draftConflict = false
@@ -348,7 +362,7 @@ Item {
       phase = "error"
       lastErrorCode = String(error.code || "UNKNOWN_ERROR")
       lastError = String(error.message || "FreshBooks operation failed")
-      outcomeUnknown = error.outcomeUnknown === true || (completed.intent === "refreshTimers" && unresolvedOutcome)
+      outcomeUnknown = error.outcomeUnknown === true || (completed.intent === _unknownRefreshIntent && unresolvedOutcome)
       if (lastErrorCode === "REMOTE_CHANGED") {
         conflictPending = true
         _draftConflict = false
@@ -356,8 +370,12 @@ Item {
         refresh()
       }
       if (lastErrorCode === "TIMER_SWITCH_PARTIAL") refreshAll(lastEntryFrom, lastEntryTo)
-      if (outcomeUnknown && completed.intent !== "refreshTimers") refresh()
-      if (outcomeUnknown && completed.intent !== "refreshTimers") {
+      if (error.outcomeUnknown === true) {
+        _unknownRefreshIntent = completed.intent.indexOf("Entry") !== -1 ? "refreshEntries" : "refreshTimers"
+        if (_unknownRefreshIntent === "refreshEntries") refreshEntries(lastEntryFrom, lastEntryTo)
+        else refresh()
+      }
+      if (error.outcomeUnknown === true) {
         var safeQueue = []
         for (var q = 0; q < _queue.length; q++) if (!_queue[q].mutation) safeQueue.push(_queue[q])
         _queue = safeQueue
@@ -367,7 +385,10 @@ Item {
       phase = "ready"
       if (completed.intent === "refreshTimers") {
         adoptTimerData(data)
-        if (outcomeUnknown && !conflictPending) outcomeUnknown = false
+        if (outcomeUnknown && _unknownRefreshIntent === "refreshTimers" && !conflictPending) {
+          outcomeUnknown = false
+          _unknownRefreshIntent = ""
+        }
       }
       else if (completed.intent === "refreshProjects") {
         projects = Array.isArray(data) ? data : []
@@ -386,7 +407,13 @@ Item {
         cacheData.recentEntries = recentCache
       }
       else if (completed.intent === "refreshDiagnostics") diagnostics = data || ({})
-      else if (completed.intent === "refreshEntries") adoptEntryData(data)
+      else if (completed.intent === "refreshEntries") {
+        adoptEntryData(data)
+        if (outcomeUnknown && _unknownRefreshIntent === "refreshEntries" && !conflictPending) {
+          outcomeUnknown = false
+          _unknownRefreshIntent = ""
+        }
+      }
       else {
         if (!conflictPending) clearError()
         if ((completed.intent === "updateTimerNote" || completed.intent === "correctDuration") && data && data.snapshotToken)
