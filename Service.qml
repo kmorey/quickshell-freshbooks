@@ -468,7 +468,10 @@ Item {
     interval: 15000
     repeat: true
     running: root.hasVisibleConsumers
-    onTriggered: root.refresh()
+    onTriggered: {
+      root.refresh()
+      if (root.lastEntryFrom !== "" || root.lastEntryTo !== "") root.refreshEntries(root.lastEntryFrom, root.lastEntryTo)
+    }
   }
 
   Component.onCompleted: {
