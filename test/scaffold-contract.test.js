@@ -41,6 +41,15 @@ test('keeps FreshBooks invocation as an argv array with no command shell', () =>
   assert.match(adapter, /schemaVersion !== 1/)
 })
 
+test('imports Quickshell.Io wherever IO types are instantiated', () => {
+  const service = fs.readFileSync(path.join(root, 'Service.qml'), 'utf8')
+  const widget = fs.readFileSync(path.join(root, 'BarWidget.qml'), 'utf8')
+  assert.match(service, /^import Quickshell\.Io$/m)
+  assert.match(widget, /^import Quickshell\.Io$/m)
+  assert.ok(widget.includes(String.fromCodePoint(0xf051b)))
+  assert.ok(!widget.includes(String.fromCodePoint(0xf1442)))
+})
+
 test('exposes one deep intent module and an injectable deterministic adapter', () => {
   const service = fs.readFileSync(path.join(root, 'Service.qml'), 'utf8')
   for (const intent of [

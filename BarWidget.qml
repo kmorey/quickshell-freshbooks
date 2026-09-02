@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "ServiceAccess.js" as ServiceAccess
@@ -12,6 +13,7 @@ BarWidget {
   readonly property var timeTracking: ServiceAccess.serviceFor(bar ? bar.shell : null, moduleName)
   readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
+  readonly property string iconGlyph: "󰔛"
   readonly property string label: {
     if (!timeTracking) return "FreshBooks"
     if (timerMode === "multiple") return "Choose timer"
@@ -86,7 +88,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical ? "" : root.label
+    text: root.vertical ? "" : root.iconGlyph + "  " + root.label
     labelVisible: !root.vertical
     tooltipText: root.timerMode === "multiple"
       ? "FreshBooks has multiple unlogged timers"
@@ -100,7 +102,7 @@ BarWidget {
     OpticalGlyph {
       visible: root.vertical
       anchors.centerIn: parent
-      text: "󱑂"
+      text: root.iconGlyph
       fontFamily: button.fontFamily
       fontSize: button.fontSize
       color: button.foreground

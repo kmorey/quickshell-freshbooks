@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import "TimeTrackingModel.js" as Model
 
 Item {
