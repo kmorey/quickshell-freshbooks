@@ -30,7 +30,14 @@ Panel {
   readonly property var orderedProjects: timeTracking
     ? Model.recentProjectOrder(timeTracking.projects, timeTracking.recentEntries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
     : []
-  readonly property var projectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), projectSearch)
+  readonly property var projectShortcuts: timeTracking
+    ? Model.searchShortcuts(Model.recentShortcutOrder(
+        Model.projectShortcuts(timeTracking.projects),
+        timeTracking.recentEntries,
+        timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "",
+        timeTracking.activeTimer ? timeTracking.activeTimer.serviceId : ""
+      ), projectSearch)
+    : []
   readonly property var setupDiagnostics: timeTracking ? (timeTracking.diagnostics || {}) : ({})
   readonly property bool setupRequired: !timeTracking || !timeTracking.diagnosticsReady
     || setupDiagnostics.configured !== true

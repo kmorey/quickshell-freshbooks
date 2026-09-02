@@ -560,6 +560,7 @@ Item {
         for (var r = 0; r < recentEntries.length; r++) recentCache.push({
           id: recentEntries[r].id,
           projectId: recentEntries[r].projectId,
+          serviceId: recentEntries[r].serviceId,
           startedAt: recentEntries[r].startedAt
         })
         cacheData.recentEntries = recentCache

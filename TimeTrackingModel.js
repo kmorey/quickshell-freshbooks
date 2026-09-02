@@ -257,6 +257,45 @@ function projectLabel(project) {
   return String(project.clientName || "") + "\n" + String(project.name || project.title || "")
 }
 
+function shortcutKey(projectValue, serviceValue) {
+  var project = String(projectValue === undefined || projectValue === null ? "" : projectValue)
+  var service = String(serviceValue === undefined || serviceValue === null ? "" : serviceValue)
+  return project + "\n" + service
+}
+
+function shortcutLabel(shortcut) {
+  return projectLabel(shortcut && shortcut.project) + "\n" + String(shortcut && shortcut.serviceName || "")
+}
+
+function recentShortcutOrder(shortcuts, entries, activeProjectId, activeServiceId) {
+  var lastUsed = {}
+  var values = asArray(entries)
+  for (var i = 0; i < values.length; i++) {
+    var entry = values[i] || {}
+    var entryProjectId = entry.projectId !== undefined ? entry.projectId : entry.project_id
+    if (entryProjectId === undefined || entryProjectId === null || String(entryProjectId) === "") continue
+    var entryServiceId = entry.serviceId !== undefined ? entry.serviceId : entry.service_id
+    var key = shortcutKey(entryProjectId, entryServiceId)
+    var timestamp = Date.parse(String(entry.startedAt || entry.updatedAt || entry.started_at || entry.updated_at || ""))
+    if (!isFinite(timestamp)) timestamp = 0
+    if (lastUsed[key] === undefined || timestamp > lastUsed[key]) lastUsed[key] = timestamp
+  }
+
+  var activeKey = shortcutKey(activeProjectId, activeServiceId)
+  var hasActiveShortcut = String(activeProjectId === undefined || activeProjectId === null ? "" : activeProjectId) !== ""
+  var result = asArray(shortcuts).filter(function(shortcut) { return activeProject(shortcut && shortcut.project) })
+  result.sort(function(a, b) {
+    var aKey = shortcutKey(a && a.projectId, a && a.serviceId)
+    var bKey = shortcutKey(b && b.projectId, b && b.serviceId)
+    if (hasActiveShortcut && aKey === activeKey && bKey !== activeKey) return -1
+    if (hasActiveShortcut && bKey === activeKey && aKey !== activeKey) return 1
+    var recent = finiteNumber(lastUsed[bKey], 0) - finiteNumber(lastUsed[aKey], 0)
+    if (recent !== 0) return recent
+    return shortcutLabel(a).localeCompare(shortcutLabel(b))
+  })
+  return result
+}
+
 function recentProjectOrder(projects, entries, activeProjectId) {
   var lastUsed = {}
   var values = asArray(entries)
@@ -297,6 +336,7 @@ if (typeof module !== "undefined") module.exports = {
   entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
+  recentShortcutOrder: recentShortcutOrder,
   recordSnapshotChanged: recordSnapshotChanged,
   searchProjects: searchProjects,
   searchShortcuts: searchShortcuts,

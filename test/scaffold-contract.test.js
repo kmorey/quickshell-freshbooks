@@ -109,6 +109,7 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
 
 test('ships timer, project, and calendar workflows in one keyboard panel', () => {
   const panel = fs.readFileSync(path.join(root, 'Panel.qml'), 'utf8')
+  const service = fs.readFileSync(path.join(root, 'Service.qml'), 'utf8')
   for (const tab of ['timer', 'projects', 'calendar']) assert.match(panel, new RegExp(`"${tab}"`))
   assert.match(panel, /KeyboardPanel/)
   assert.match(panel, /centerOnBar:\s*false/)
@@ -148,4 +149,6 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /contentWidth:\s*panel\.fittedContentWidth\(Style\.space\(460\)\)/)
   assert.match(panel, /Model\.formatHoursMinutes/)
   assert.doesNotMatch(panel, /root\.tab === "calendar" \? 620 : 460/)
+  assert.match(panel, /Model\.recentShortcutOrder/)
+  assert.match(service, /serviceId:\s*recentEntries\[r\]\.serviceId/)
 })

@@ -120,3 +120,28 @@ test('orders Project Shortcuts by selected Active Timer then FreshBooks recency'
   assert.deepEqual(model.recentProjectOrder(projects, entries, 1).map(project => project.id), [1, 2, 4])
   assert.deepEqual(model.recentProjectOrder(projects, entries, '').map(project => project.id), [2, 1, 4])
 })
+
+test('orders each Project Shortcut by its exact project and service recency', () => {
+  const projects = [
+    { id: 1, title: 'Alpha', clientName: 'Client', active: true, services: [{ id: 11, name: 'Design' }, { id: 12, name: 'Development' }] },
+    { id: 2, title: 'Beta', clientName: 'Client', active: true, services: [{ id: 21, name: 'Meeting' }] }
+  ]
+  const entries = [
+    { projectId: 1, serviceId: 12, startedAt: '2026-08-01T10:00:00Z' },
+    { projectId: 2, serviceId: 21, startedAt: '2026-09-01T10:00:00Z' },
+    { projectId: 1, serviceId: 11, startedAt: '2026-09-02T10:00:00Z' }
+  ]
+  const shortcuts = model.projectShortcuts(projects)
+  const pairs = values => values.map(shortcut => [shortcut.projectId, shortcut.serviceId])
+
+  assert.deepEqual(model.recentShortcutOrder(shortcuts, entries, '', '').map(shortcut => [shortcut.projectId, shortcut.serviceId]), [
+    [1, 11],
+    [2, 21],
+    [1, 12]
+  ])
+  assert.deepEqual(pairs(model.recentShortcutOrder(shortcuts, entries, 1, 12)), [
+    [1, 12],
+    [1, 11],
+    [2, 21]
+  ])
+})
