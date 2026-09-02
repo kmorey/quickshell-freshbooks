@@ -25,6 +25,22 @@ BarWidget {
   function close() { if (panelLoader.item) panelLoader.item.close() }
   function closeForPopoutSwitch() { if (panelLoader.item) panelLoader.item.closeForPopoutSwitch() }
   function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
+  function openCalendar() {
+    if (!panelLoader.item) return
+    panelLoader.item.tab = "calendar"
+    panelLoader.item.open()
+  }
+
+  function boundedStatus() {
+    return JSON.stringify({
+      ready: root.timeTracking !== null,
+      opened: root.opened,
+      timerMode: root.timerMode,
+      running: root.activeTimer ? root.activeTimer.running === true : false,
+      busy: root.timeTracking ? root.timeTracking.busy === true : false,
+      lastErrorCode: root.timeTracking ? String(root.timeTracking.lastErrorCode || "") : "SERVICE_UNAVAILABLE"
+    })
+  }
 
   function injectPanel() {
     var target = panelLoader.item
@@ -58,7 +74,9 @@ BarWidget {
     function open(): void { root.open() }
     function close(): void { root.close() }
     function toggle(): void { root.togglePanel() }
+    function openCalendar(): void { root.openCalendar() }
     function refresh(): void { if (root.timeTracking) root.timeTracking.refresh() }
+    function status(): string { return root.boundedStatus() }
   }
 
   WidgetButton {

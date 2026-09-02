@@ -22,6 +22,9 @@ test('uses the generic third-party service lookup compatibility seam', () => {
   assert.match(access, /shell\.serviceFor/)
   assert.doesNotMatch(access + widget, /firstPartyServiceFor/)
   assert.match(widget, /ServiceAccess\.serviceFor/)
+  assert.match(widget, /openCalendar/)
+  assert.match(widget, /boundedStatus/)
+  assert.doesNotMatch(widget, /activeTimer\.note/)
 })
 
 test('keeps FreshBooks invocation as an argv array with no command shell', () => {

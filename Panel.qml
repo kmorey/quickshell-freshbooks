@@ -32,6 +32,7 @@ Panel {
   property bool confirmingDelete: false
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
 
   SystemClock {
     id: panelClock
@@ -51,11 +52,11 @@ Panel {
   function open() {
     refresh()
     controller.show()
-    if (timeTracking) timeTracking.registerVisibleConsumer("freshbooks-panel")
+    if (timeTracking) timeTracking.registerVisibleConsumer(consumerId)
   }
 
   function close() {
-    if (timeTracking) timeTracking.unregisterVisibleConsumer("freshbooks-panel")
+    if (timeTracking) timeTracking.unregisterVisibleConsumer(consumerId)
     controller.hide()
   }
 
