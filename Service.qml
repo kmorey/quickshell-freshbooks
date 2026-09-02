@@ -25,6 +25,8 @@ Item {
   property bool snapshotStale: true
   property double lastRefreshMs: 0
   property var visibleConsumers: ({})
+  property string lastEntryFrom: ""
+  property string lastEntryTo: ""
 
   readonly property string timerMode: Model.timerMode(timers)
   readonly property var activeTimer: Model.selectedTimer(timers, selectedTimerId)
@@ -77,8 +79,28 @@ Item {
     enqueue("refreshTimers", ["timer", "status"], {}, false)
   }
 
-  function start(projectId, note) {
+  function refreshProjects() {
+    enqueue("refreshProjects", ["projects", "list"], {}, false)
+  }
+
+  function refreshEntries(fromDate, toDate) {
+    lastEntryFrom = String(fromDate || lastEntryFrom || "")
+    lastEntryTo = String(toDate || lastEntryTo || "")
+    var argv = ["time", "list"]
+    if (lastEntryFrom !== "") argv.push("--from", lastEntryFrom)
+    if (lastEntryTo !== "") argv.push("--to", lastEntryTo)
+    enqueue("refreshEntries", argv, { fromDate: lastEntryFrom, toDate: lastEntryTo }, false)
+  }
+
+  function refreshAll(fromDate, toDate) {
+    refresh()
+    refreshProjects()
+    refreshEntries(fromDate, toDate)
+  }
+
+  function start(projectId, serviceId, note) {
     var argv = ["timer", "start", "--project", String(projectId)]
+    if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
     if (String(note || "") !== "") argv.push("--note", String(note))
     enqueue("start", argv, { projectId: projectId }, true)
   }
@@ -108,9 +130,10 @@ Item {
     enqueue("log", ["timer", "log", "--id", String(activeTimer.id)], { timerId: activeTimer.id }, true)
   }
 
-  function switchTimer(projectId) {
+  function switchTimer(projectId, serviceId) {
     if (timerMode === "multiple" || (timerMode === "single" && !activeTimer)) return
     var argv = ["timer", "switch", "--project", String(projectId)]
+    if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
     if (activeTimer) argv.push("--id", String(activeTimer.id))
     enqueue("switch", argv, { projectId: projectId }, true)
   }
@@ -201,13 +224,15 @@ Item {
     } else {
       clearError()
       if (completed.intent === "refreshTimers") adoptTimerData(data)
+      else if (completed.intent === "refreshProjects") projects = Array.isArray(data) ? data : []
+      else if (completed.intent === "refreshEntries") entries = Array.isArray(data) ? data : []
       else reconcile = true
     }
     if (phase !== "error") phase = timerMode === "multiple" ? "ambiguous" : "ready"
     // Mutation responses are authoritative, but their exact normalized shape
     // belongs to the CLI contract. Reconcile the whole timer set before the
     // next view treats it as current.
-    if (reconcile) refresh()
+    if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
     else pump()
   }
 

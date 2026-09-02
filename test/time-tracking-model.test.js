@@ -71,6 +71,24 @@ test('ticks a running Active Timer from the confirmed observation and never tick
   assert.equal(model.formatDuration(3661), '01:01:01')
 })
 
+test('parses explicit HH:MM and HH:MM:SS duration input', () => {
+  assert.equal(model.parseDurationInput('10:00'), 36000)
+  assert.equal(model.parseDurationInput('00:01:30'), 90)
+  assert.equal(model.parseDurationInput('1:60'), null)
+  assert.equal(model.parseDurationInput('90'), null)
+})
+
+test('filters projects and orders one day of entries chronologically', () => {
+  const projects = [{ title: 'Website', clientName: 'Acme' }, { title: 'Internal', clientName: '' }]
+  assert.deepEqual(model.searchProjects(projects, 'acme'), [projects[0]])
+  const entries = [
+    { id: 2, localDate: '2026-09-02', startedAt: '2026-09-02T15:00:00Z' },
+    { id: 1, localDate: '2026-09-02', startedAt: '2026-09-02T14:00:00Z' },
+    { id: 3, localDate: '2026-09-03', startedAt: '2026-09-03T14:00:00Z' }
+  ]
+  assert.deepEqual(model.entriesForDay(entries, '2026-09-02').map(entry => entry.id), [1, 2])
+})
+
 test('orders Project Shortcuts by selected Active Timer then FreshBooks recency', () => {
   const projects = [
     { id: 1, title: 'Alpha', clientName: 'Client', active: true },

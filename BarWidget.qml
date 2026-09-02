@@ -18,6 +18,22 @@ BarWidget {
     if (!activeTimer) return "FreshBooks"
     return Model.formatDuration(Model.elapsedSeconds(activeTimer, clock.date.getTime()))
   }
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+
+  function open() { if (panelLoader.item) panelLoader.item.open() }
+  function close() { if (panelLoader.item) panelLoader.item.close() }
+  function closeForPopoutSwitch() { if (panelLoader.item) panelLoader.item.closeForPopoutSwitch() }
+  function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
+
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    target.bar = root.bar
+    target.anchorItem = button
+    target.hostWidget = root
+    target.timeTracking = root.timeTracking
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -25,6 +41,24 @@ BarWidget {
   SystemClock {
     id: clock
     precision: SystemClock.Seconds
+  }
+
+  onBarChanged: injectPanel()
+
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("Panel.qml")
+    visible: false
+    onLoaded: { root.injectPanel(); Qt.callLater(root.injectPanel) }
+  }
+
+  IpcHandler {
+    target: "kmorey.freshbooks-time"
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function toggle(): void { root.togglePanel() }
+    function refresh(): void { if (root.timeTracking) root.timeTracking.refresh() }
   }
 
   WidgetButton {
@@ -39,7 +73,7 @@ BarWidget {
     horizontalMargin: 8.75
     verticalPadding: 8.75
     onPressed: function() {
-      if (root.timeTracking) root.timeTracking.refresh()
+      root.togglePanel()
     }
 
     OpticalGlyph {

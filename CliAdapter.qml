@@ -73,6 +73,13 @@ Item {
       failed(requestId, { code: "INVALID_JSON", message: "freshbooks-cli returned invalid JSON" })
       return
     }
+    if (stdoutDocument.schemaVersion !== 1) {
+      failed(requestId, {
+        code: "CLI_SCHEMA_MISMATCH",
+        message: "freshbooks-cli JSON schema is incompatible; version 0.2.0 or newer is required"
+      })
+      return
+    }
     if (stdoutDocument.ok !== true) {
       failed(requestId, stdoutDocument.error || { code: "CLI_ERROR", message: "freshbooks-cli reported an error" })
       return

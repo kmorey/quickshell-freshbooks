@@ -30,6 +30,8 @@ test('keeps FreshBooks invocation as an argv array with no command shell', () =>
   assert.doesNotMatch(adapter, /sh",\s*"-c|bash",\s*"-c/)
   assert.match(adapter, /CLI_TIMEOUT/)
   assert.match(adapter, /INVALID_JSON/)
+  assert.match(adapter, /CLI_SCHEMA_MISMATCH/)
+  assert.match(adapter, /schemaVersion !== 1/)
 })
 
 test('exposes one deep intent module and an injectable deterministic adapter', () => {
@@ -50,4 +52,14 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.match(service, /property var cliAdapter: productionCli/)
   assert.match(service, /function useAdapter\(adapter\)/)
   assert.equal((service.match(/CliAdapter\s*\{/g) || []).length, 1)
+})
+
+test('ships timer, project, and calendar workflows in one keyboard panel', () => {
+  const panel = fs.readFileSync(path.join(root, 'Panel.qml'), 'utf8')
+  for (const tab of ['timer', 'projects', 'calendar']) assert.match(panel, new RegExp(`"${tab}"`))
+  assert.match(panel, /KeyboardPanel/)
+  assert.match(panel, /parseDurationInput/)
+  assert.match(panel, /reportingWeekTotal/)
+  assert.match(panel, /switchTimer/)
+  assert.match(panel, /registerVisibleConsumer/)
 })

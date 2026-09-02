@@ -73,7 +73,7 @@ function calendarMonth(year, month) {
 
 function entryDateKey(entry) {
   if (!entry) return ""
-  var local = String(entry.localDate || entry.date || "")
+  var local = String(entry.localDate || entry.date || entry.local_started_at || entry.started_at || "").slice(0, 10)
   return parseDateKey(local) ? local : ""
 }
 
@@ -170,6 +170,30 @@ function formatDuration(seconds) {
   return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
+function parseDurationInput(value) {
+  var match = /^(\d+):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim())
+  if (!match) return null
+  var hours = Number(match[1])
+  var minutes = Number(match[2])
+  var seconds = Number(match[3] || 0)
+  if (minutes > 59 || seconds > 59) return null
+  return hours * 3600 + minutes * 60 + seconds
+}
+
+function entriesForDay(entries, key) {
+  return asArray(entries).filter(function(entry) { return entryDateKey(entry) === key }).sort(function(a, b) {
+    return Date.parse(String(a.startedAt || a.started_at || "")) - Date.parse(String(b.startedAt || b.started_at || ""))
+  })
+}
+
+function searchProjects(projects, query) {
+  var needle = String(query || "").trim().toLowerCase()
+  if (needle === "") return asArray(projects).slice()
+  return asArray(projects).filter(function(project) {
+    return projectLabel(project).toLowerCase().indexOf(needle) !== -1
+  })
+}
+
 function activeProject(project) {
   if (!project) return false
   return project.active !== false && project.complete !== true && project.archived !== true
@@ -191,7 +215,7 @@ function recentProjectOrder(projects, entries, activeProjectId) {
     var entry = values[i] || {}
     var id = String(entry.projectId !== undefined ? entry.projectId : "")
     if (id === "") continue
-    var timestamp = Date.parse(String(entry.startedAt || entry.updatedAt || ""))
+    var timestamp = Date.parse(String(entry.startedAt || entry.started_at || entry.updatedAt || entry.updated_at || ""))
     if (!isFinite(timestamp)) timestamp = 0
     if (lastUsed[id] === undefined || timestamp > lastUsed[id]) lastUsed[id] = timestamp
   }
@@ -218,8 +242,11 @@ if (typeof module !== "undefined") module.exports = {
   elapsedSeconds: elapsedSeconds,
   entryDateKey: entryDateKey,
   formatDuration: formatDuration,
+  parseDurationInput: parseDurationInput,
+  entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
+  searchProjects: searchProjects,
   reportingWeekTotal: reportingWeekTotal,
   selectedTimer: selectedTimer,
   stateProjection: stateProjection,
