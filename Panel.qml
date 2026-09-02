@@ -17,14 +17,16 @@ Panel {
   property string tab: "timer"
   property string projectSearch: ""
   property int keyboardCursor: 0
+  property bool calendarGridFocused: true
   property date today: new Date()
   property int viewYear: today.getFullYear()
   property int viewMonth: today.getMonth() + 1
   property string selectedDateKey: localDateKey(today)
+  property string calendarCursorDateKey: selectedDateKey
   readonly property var monthCells: Model.calendarMonth(viewYear, viewMonth)
   readonly property var dayEntries: timeTracking ? Model.entriesForDay(timeTracking.entries, selectedDateKey) : []
   readonly property var orderedProjects: timeTracking
-    ? Model.recentProjectOrder(timeTracking.projects, timeTracking.entries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
+    ? Model.recentProjectOrder(timeTracking.projects, timeTracking.recentEntries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
     : []
   readonly property var projectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), projectSearch)
   property string editingEntryId: ""
@@ -80,25 +82,42 @@ Panel {
     var index = tabs.indexOf(tab)
     tab = tabs[(index + (direction > 0 ? 1 : 2)) % 3]
     keyboardCursor = 0
+    calendarGridFocused = tab === "calendar"
   }
 
   function moveKeyboardCursor(dx, dy) {
+    if (tab === "calendar" && calendarGridFocused) {
+      calendarCursorDateKey = Model.addDays(calendarCursorDateKey, dx + dy * 7)
+      var cursor = Model.parseDateKey(calendarCursorDateKey)
+      if (cursor && (cursor.year !== viewYear || cursor.month !== viewMonth)) {
+        viewYear = cursor.year
+        viewMonth = cursor.month
+        refresh()
+      }
+      return
+    }
     if (dx !== 0) { switchTab(dx); return }
-    var count = tab === "timer" ? 3 : (tab === "projects" ? projectShortcuts.length : Math.max(1, dayEntries.length + 1))
+    var count = tab === "timer" ? 5 : (tab === "projects" ? projectShortcuts.length : Math.max(1, dayEntries.length + 1))
     keyboardCursor = Math.max(0, Math.min(count - 1, keyboardCursor + dy))
-    if (tab === "calendar" && keyboardCursor === 0) selectedDateKey = Model.addDays(selectedDateKey, dy * 7)
+    if (tab === "calendar" && keyboardCursor === 0 && dy < 0) calendarGridFocused = true
   }
 
   function activateKeyboardCursor() {
     if (!timeTracking || timeTracking.busy) return
     if (tab === "timer") {
-      if (keyboardCursor === 0 && timeTracking.activeTimer) timeTracking.activeTimer.running ? timeTracking.pause() : timeTracking.resume()
-      else if (keyboardCursor === 1 && timeTracking.activeTimer) timeTracking.logTimer()
-      else if (keyboardCursor === 2) refresh()
+      if (keyboardCursor === 0) noteField.forceActiveFocus()
+      else if (keyboardCursor === 1) durationField.forceActiveFocus()
+      else if (keyboardCursor === 2 && timeTracking.activeTimer) timeTracking.activeTimer.running ? timeTracking.pause() : timeTracking.resume()
+      else if (keyboardCursor === 3 && timeTracking.activeTimer) timeTracking.logTimer()
+      else if (keyboardCursor === 4) refresh()
     } else if (tab === "projects" && projectShortcuts.length) {
       startShortcut(projectShortcuts[Math.min(keyboardCursor, projectShortcuts.length - 1)])
     } else if (tab === "calendar") {
-      if (keyboardCursor === 0) beginAddEntry()
+      if (calendarGridFocused) {
+        selectedDateKey = calendarCursorDateKey
+        calendarGridFocused = false
+        keyboardCursor = 0
+      } else if (keyboardCursor === 0) beginAddEntry()
       else if (dayEntries.length) beginEditEntry(dayEntries[Math.min(keyboardCursor - 1, dayEntries.length - 1)])
     }
   }
@@ -237,6 +256,26 @@ Panel {
     persistEntryDraft(false)
   }
 
+  function adoptCleanEntryEditor() {
+    if (!timeTracking || editingEntryId === "" || editingEntryId === "new" || entryDraftDirty) return
+    for (var i = 0; i < timeTracking.entries.length; i++) {
+      var entry = timeTracking.entries[i]
+      if (String(entry.id) !== String(editingEntryId)) continue
+      entryProjectId = String(entry.projectId === null ? "" : entry.projectId)
+      entryServiceId = String(entry.serviceId === null ? "" : entry.serviceId)
+      entryDateKey = String(entry.localDate || selectedDateKey)
+      entryOriginalDateKey = entryDateKey
+      entrySnapshotToken = String(entry.snapshotToken || "")
+      entryDateField.text = entryDateKey
+      entryNoteField.text = String(entry.note || "")
+      entryDurationField.text = Model.formatDuration(entry.durationSeconds || 0)
+      persistEntryDraft(false)
+      return
+    }
+    editingEntryId = ""
+    timeTracking.clearEntryDraft()
+  }
+
   function saveEntry() {
     var seconds = Model.parseDurationInput(entryDurationField.text)
     if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey) || !timeTracking) return
@@ -260,11 +299,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: noteField.activeFocus || durationField.activeFocus || searchField.activeFocus || entryNoteField.activeFocus || entryDurationField.activeFocus || entryDateField.activeFocus || root.confirmingDelete
+      blocked: noteField.activeFocus || durationField.activeFocus || searchField.activeFocus || root.editingEntryId !== ""
       onCloseRequested: root.close()
       onMoveRequested: function(dx, dy) { root.moveKeyboardCursor(dx, dy) }
       onActivateRequested: root.activateKeyboardCursor()
       onDeleteRequested: root.deleteKeyboardSelection()
+      onTextKey: function(text) { if (root.tab === "calendar" && (text === "g" || text === "G")) root.calendarGridFocused = true }
       onTabRequested: function(direction) {
         root.switchTab(direction)
       }
@@ -272,6 +312,17 @@ Panel {
       Column {
         anchors.fill: parent
         spacing: Style.space(10)
+
+        Text {
+          visible: root.timeTracking && ((root.timeTracking.diagnostics || {}).authenticated !== true || (root.timeTracking.diagnostics || {}).businessSelected !== true)
+          width: parent.width
+          wrapMode: Text.Wrap
+          text: root.timeTracking && (root.timeTracking.diagnostics || {}).authenticated !== true
+            ? "FreshBooks setup required. Run `freshbooks auth login` in a terminal."
+            : "Choose an account in a terminal with `freshbooks business use ID`."
+          color: Color.urgent
+          font.family: root.fontFamily
+        }
 
         Row {
           width: parent.width
@@ -358,21 +409,18 @@ Panel {
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "HH:MM or HH:MM:SS"
               onTextEdited: root.persistTimerDurationDraft()
-              onAccepted: {
-                var seconds = Model.parseDurationInput(text)
-                if (seconds !== null && root.timeTracking) root.timeTracking.correctDuration(seconds)
-              }
               onEditingFinished: {
                 var seconds = Model.parseDurationInput(text)
-                if (seconds !== null && root.timeTracking && !root.timeTracking.busy) root.timeTracking.correctDuration(seconds)
+                if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.busy) root.timeTracking.correctDuration(seconds)
                 else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
               }
             }
+            Text { visible: root.timeTracking && root.timeTracking.busy; text: "Saving or refreshing…"; color: Qt.darker(root.foreground, 1.25); font.family: root.fontFamily; horizontalAlignment: Text.AlignHCenter; width: parent.width }
             Row {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(8)
               ActionButton {
-                selected: root.tab === "timer" && root.keyboardCursor === 0
+                selected: root.tab === "timer" && root.keyboardCursor === 2
                 label: root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: {
@@ -380,8 +428,8 @@ Panel {
                   else root.timeTracking.resume()
                 }
               }
-              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 1; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
-              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 2; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
+              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
+              ActionButton { selected: root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
             }
             Text {
               visible: root.timeTracking && root.timeTracking.lastError !== ""
@@ -437,7 +485,7 @@ Panel {
                     border.color: Color.accent
                     Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(60); text: String(modelData.project.clientName || "") + (modelData.project.clientName ? " · " : "") + String(modelData.project.title || modelData.project.name || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); elide: Text.ElideRight; color: root.foreground; font.family: root.fontFamily }
                     Text { anchors.right: parent.right; anchors.rightMargin: Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: root.timeTracking && root.timeTracking.activeTimer && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId) && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId) && root.timeTracking.activeTimer.running ? "Ⅱ" : "▶"; color: Color.accent; font.family: root.fontFamily; font.pixelSize: Style.font.title }
-                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; enabled: root.canMutate; cursorShape: Qt.PointingHandCursor; onClicked: root.startShortcut(modelData) }
+                    MouseArea { id: projectMouse; anchors.fill: parent; hoverEnabled: true; enabled: root.canMutate; cursorShape: Qt.PointingHandCursor; onClicked: { root.keyboardCursor = index; root.startShortcut(modelData) } }
                   }
                 }
               }
@@ -467,16 +515,19 @@ Panel {
                   height: Style.space(45)
                   radius: Style.cornerRadius
                   color: root.selectedDateKey === modelData.key ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, modelData.inMonth ? 0.07 : 0.025)
+                  border.width: root.calendarCursorDateKey === modelData.key ? 2 : (root.localDateKey(root.today) === modelData.key ? 1 : 0)
+                  border.color: root.calendarCursorDateKey === modelData.key ? root.foreground : Color.accent
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7); font.family: root.fontFamily }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatDuration((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0).replace(/^00:/, "") : ""; color: root.foreground; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.selectedDateKey = modelData.key; root.keyboardCursor = 0 } }
+                  Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: root.foreground; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.selectedDateKey = modelData.key; root.calendarCursorDateKey = modelData.key; root.calendarGridFocused = true; root.keyboardCursor = 0 } }
                 }
               }
             }
             Row {
               width: parent.width
               Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              ActionButton { id: addEntryButton; selected: root.tab === "calendar" && root.keyboardCursor === 0; label: "+ Entry"; onTriggered: root.beginAddEntry() }
+              ActionButton { id: addEntryButton; selected: root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; onTriggered: root.beginAddEntry() }
             }
             Flickable {
               visible: root.editingEntryId === ""
@@ -531,9 +582,12 @@ Panel {
                       width: entryProjectColumn.width
                       height: Style.space(30)
                       radius: Style.cornerRadius
+                      activeFocusOnTab: true
                       color: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId) ? Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
                       Text { anchors.centerIn: parent; width: parent.width - Style.space(12); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
                       MouseArea { anchors.fill: parent; onClicked: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) } }
+                      Keys.onReturnPressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
+                      Keys.onSpacePressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
                     }
                   }
                 }
@@ -550,9 +604,7 @@ Panel {
                     if (!root.confirmingDelete) root.confirmingDelete = true
                     else {
                       root.timeTracking.deleteEntry(root.editingEntryId, root.entrySnapshotToken)
-                      root.editingEntryId = ""
                       root.confirmingDelete = false
-                      root.timeTracking.clearEntryDraft()
                     }
                   }
                 }
@@ -575,6 +627,9 @@ Panel {
     property string label: ""
     property bool selected: false
     signal triggered()
+    activeFocusOnTab: true
+    Keys.onReturnPressed: action.triggered()
+    Keys.onSpacePressed: action.triggered()
     implicitWidth: Math.max(Style.space(54), actionLabel.implicitWidth + Style.space(20))
     implicitHeight: Style.space(32)
     radius: Style.cornerRadius
@@ -593,6 +648,7 @@ Panel {
       root.editingEntryId = ""
       root.confirmingDelete = false
     }
+    function onEntriesChanged() { root.adoptCleanEntryEditor() }
     function onDraftTimerDurationDirtyChanged() {
       if (root.timeTracking && !root.timeTracking.draftTimerDurationDirty) root.hydrateDrafts()
     }

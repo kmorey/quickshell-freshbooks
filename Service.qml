@@ -25,6 +25,8 @@ Item {
   property var timers: []
   property var projects: []
   property var entries: []
+  property var recentEntries: []
+  property var diagnostics: ({})
   property string selectedTimerId: ""
   property string phase: "starting"
   property string lastErrorCode: ""
@@ -49,6 +51,8 @@ Item {
   property bool _refreshQueued: false
   property var _conflictRequest: null
   property bool _draftConflict: false
+  property bool _projectsConfirmed: false
+  property bool _recentConfirmed: false
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function clearEntryDraft() { stateData.entryDraft = ({}) }
@@ -128,10 +132,19 @@ Item {
     enqueue("refreshEntries", argv, { fromDate: lastEntryFrom, toDate: lastEntryTo }, false)
   }
 
+  function refreshRecentEntries() {
+    enqueue("refreshRecentEntries", ["time", "list", "--limit", "200"], {}, false)
+  }
+
   function refreshAll(fromDate, toDate) {
     refresh()
     refreshProjects()
+    refreshRecentEntries()
     refreshEntries(fromDate, toDate)
+  }
+
+  function refreshDiagnostics() {
+    enqueue("refreshDiagnostics", ["diagnostics", "status"], {}, false)
   }
 
   function start(projectId, serviceId, note) {
@@ -342,6 +355,7 @@ Item {
         _conflictRequest = completed
         refresh()
       }
+      if (lastErrorCode === "TIMER_SWITCH_PARTIAL") refreshAll(lastEntryFrom, lastEntryTo)
       if (outcomeUnknown && completed.intent !== "refreshTimers") refresh()
       if (outcomeUnknown && completed.intent !== "refreshTimers") {
         var safeQueue = []
@@ -351,19 +365,35 @@ Item {
       if (completed.intent === "correctDuration") clearTimerDurationDraft()
     } else {
       phase = "ready"
-      if (!conflictPending && !(completed.intent === "refreshTimers" && outcomeUnknown)) clearError()
       if (completed.intent === "refreshTimers") {
         adoptTimerData(data)
-        if (outcomeUnknown && !conflictPending) clearError()
+        if (outcomeUnknown && !conflictPending) outcomeUnknown = false
       }
-      else if (completed.intent === "refreshProjects") projects = Array.isArray(data) ? data : []
+      else if (completed.intent === "refreshProjects") {
+        projects = Array.isArray(data) ? data : []
+        _projectsConfirmed = true
+        cacheData.projects = projects
+      }
+      else if (completed.intent === "refreshRecentEntries") {
+        recentEntries = Array.isArray(data) ? data : []
+        _recentConfirmed = true
+        var recentCache = []
+        for (var r = 0; r < recentEntries.length; r++) recentCache.push({
+          id: recentEntries[r].id,
+          projectId: recentEntries[r].projectId,
+          startedAt: recentEntries[r].startedAt
+        })
+        cacheData.recentEntries = recentCache
+      }
+      else if (completed.intent === "refreshDiagnostics") diagnostics = data || ({})
       else if (completed.intent === "refreshEntries") adoptEntryData(data)
       else {
+        if (!conflictPending) clearError()
         if ((completed.intent === "updateTimerNote" || completed.intent === "correctDuration") && data && data.snapshotToken)
           stateData.timerSnapshotToken = String(data.snapshotToken)
         if (completed.intent === "updateTimerNote") clearTimerNoteDraft()
         if (completed.intent === "correctDuration") clearTimerDurationDraft()
-        if (completed.intent === "createEntry" || completed.intent === "updateEntry") clearEntryDraft()
+        if (completed.intent === "createEntry" || completed.intent === "updateEntry" || completed.intent === "deleteEntry") clearEntryDraft()
         reconcile = true
       }
     }
@@ -410,6 +440,30 @@ Item {
     }
   }
 
+  FileView {
+    path: Quickshell.cachePath("kmorey.freshbooks-time-cache.json")
+    atomicWrites: true
+    printErrors: false
+    onAdapterUpdated: writeAdapter()
+    onLoaded: {
+      if (cacheData.schemaVersion !== 1) {
+        cacheData.schemaVersion = 1
+        cacheData.projects = []
+        cacheData.recentEntries = []
+      } else {
+        if (!root._projectsConfirmed && Array.isArray(cacheData.projects)) root.projects = cacheData.projects
+        if (!root._recentConfirmed && Array.isArray(cacheData.recentEntries)) root.recentEntries = cacheData.recentEntries
+      }
+    }
+
+    JsonAdapter {
+      id: cacheData
+      property int schemaVersion: 1
+      property var projects: []
+      property var recentEntries: []
+    }
+  }
+
   Timer {
     interval: 15000
     repeat: true
@@ -417,5 +471,8 @@ Item {
     onTriggered: root.refresh()
   }
 
-  Component.onCompleted: refresh()
+  Component.onCompleted: {
+    refreshDiagnostics()
+    refresh()
+  }
 }
