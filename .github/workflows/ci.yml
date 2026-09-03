@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Validate Omarchy plugin manifest
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/omacom/omarchy/b71dcad96e9d0b2962b7d225828a5cb6000ad720/bin/omarchy-plugin-validate -o /tmp/omarchy-plugin-validate
+          bash /tmp/omarchy-plugin-validate .

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "kmorey.freshbooks-time",
+  "name": "FreshBooks Time",
+  "version": "0.1.0",
+  "author": "Kevin Morey",
+  "description": "FreshBooks timer, project shortcuts, and calendar review",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "FreshBooks Time",
+    "description": "FreshBooks-backed time tracking",
+    "category": "Time",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

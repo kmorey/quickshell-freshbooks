@@ -1,0 +1,11 @@
+{
+  "name": "quickshell-freshbooks",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
