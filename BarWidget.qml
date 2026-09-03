@@ -14,7 +14,7 @@ BarWidget {
   readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
   readonly property string iconGlyph: "󰔛"
-  readonly property string uiRevision: "logical-timer-total-v1"
+  readonly property string uiRevision: "continued-timer-total-v2"
   readonly property string label: {
     if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"

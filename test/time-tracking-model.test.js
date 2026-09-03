@@ -101,6 +101,21 @@ test('sums unique Timer Segments for the full resumed Active Timer duration', ()
   assert.equal(model.logicalTimerElapsedSeconds(resumed, nowMs + 10000), 7805)
 })
 
+test('keeps the CLI aggregate when segment details contain only the active continuation', () => {
+  const nowMs = Date.parse('2026-09-03T15:00:00Z')
+  const timer = {
+    elapsedSeconds: 7260,
+    running: true,
+    observedAtMs: nowMs,
+    segments: [
+      { id: 'active-segment', durationSeconds: null, running: true, startedAt: '2026-09-03T14:59:00Z' }
+    ]
+  }
+
+  assert.equal(model.logicalTimerElapsedSeconds(timer, nowMs), 7260)
+  assert.equal(model.logicalTimerElapsedSeconds(timer, nowMs + 5000), 7265)
+})
+
 test('omits a zero hour from the bar timer label', () => {
   assert.equal(model.formatTimerLabel(0), '00:00')
   assert.equal(model.formatTimerLabel(59), '00:59')

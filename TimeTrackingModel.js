@@ -231,8 +231,9 @@ function elapsedSeconds(timer, nowMs) {
 
 function logicalTimerElapsedSeconds(timer, nowMs) {
   if (!timer) return 0
+  var confirmed = elapsedSeconds(timer, nowMs)
   var segments = asArray(timer.segments)
-  if (segments.length === 0) return elapsedSeconds(timer, nowMs)
+  if (segments.length === 0) return confirmed
 
   var seen = {}
   var total = 0
@@ -251,10 +252,10 @@ function logicalTimerElapsedSeconds(timer, nowMs) {
     }
 
     var startedAt = Date.parse(String(segment.startedAt || segment.started_at || ""))
-    if (!isFinite(startedAt)) return elapsedSeconds(timer, nowMs)
+    if (!isFinite(startedAt)) return confirmed
     total += Math.max(0, Math.floor((now - startedAt) / 1000))
   }
-  return total
+  return Math.max(confirmed, total)
 }
 
 function formatDuration(seconds) {

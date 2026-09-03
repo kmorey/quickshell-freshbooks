@@ -165,7 +165,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /active:\s*root\.tab === modelData/)
   assert.doesNotMatch(panel, /selected:\s*root\.tab === modelData/)
   assert.ok((panel.match(/root\.selectedContentColor/g) || []).length >= 4)
-  assert.match(widget, /uiRevision:\s*"logical-timer-total-v1"/)
+  assert.match(widget, /uiRevision:\s*"continued-timer-total-v2"/)
   assert.match(widget, /Model\.formatTimerLabel\(Model\.logicalTimerElapsedSeconds/)
   assert.match(widget, /selectedContentRole:/)
   assert.match(panel, /return root\.timeTracking && root\.timeTracking\.activeTimer\s*\? "Active timer/)
