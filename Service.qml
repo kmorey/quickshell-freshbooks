@@ -43,9 +43,14 @@ Item {
   property string lastEntryTo: ""
 
   readonly property string timerMode: Model.timerMode(timers)
-  readonly property var activeTimer: Model.selectedTimer(timers, selectedTimerId)
+  readonly property var activeTimer: _optimisticTimerActive ? _optimisticTimer : Model.selectedTimer(timers, selectedTimerId)
   readonly property var state: Model.stateProjection({ timers: timers, projects: projects, entries: entries }, selectedTimerId)
   readonly property bool busy: _current !== null
+  readonly property var pendingRequest: interactiveRequest()
+  readonly property bool mutationPending: pendingRequest !== null
+  readonly property string pendingIntent: pendingRequest ? String(pendingRequest.intent || "") : ""
+  readonly property var pendingPayload: pendingRequest ? (pendingRequest.payload || {}) : ({})
+  readonly property bool refreshing: refreshRequestPending()
   readonly property bool hasVisibleConsumers: Object.keys(visibleConsumers).length > 0
   readonly property bool diagnosticsReady: diagnosticsCompatible(diagnostics)
 
@@ -66,6 +71,8 @@ Item {
   property bool _draftFileReady: false
   property bool _draftResetPending: false
   property bool _fullRefreshRequested: false
+  property bool _optimisticTimerActive: false
+  property var _optimisticTimer: null
 
   function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
   function diagnosticsCompatible(value) {
@@ -106,6 +113,40 @@ Item {
     var result = argv.slice()
     if (record && String(record.snapshotToken || "") !== "") result.push("--snapshot", String(record.snapshotToken))
     return result
+  }
+
+  function requestIsInteractive(request) {
+    if (!request) return false
+    return request.mutation === true || String(request.intent || "") === "prepareCreateEntry"
+  }
+
+  function interactiveRequest() {
+    if (requestIsInteractive(_current)) return _current
+    for (var i = 0; i < _queue.length; i++) if (requestIsInteractive(_queue[i])) return _queue[i]
+    return null
+  }
+
+  function refreshRequestPending() {
+    if (_current && !requestIsInteractive(_current)) return true
+    for (var i = 0; i < _queue.length; i++) if (!requestIsInteractive(_queue[i])) return true
+    return false
+  }
+
+  function requestPending(intent) {
+    var target = String(intent || "")
+    if (_current && String(_current.intent || "") === target) return true
+    for (var i = 0; i < _queue.length; i++) if (String(_queue[i].intent || "") === target) return true
+    return false
+  }
+
+  function applyOptimisticTimer(intent, payload) {
+    _optimisticTimer = Model.optimisticTimer(activeTimer, intent, payload || {}, Date.now())
+    _optimisticTimerActive = true
+  }
+
+  function clearOptimisticTimer() {
+    _optimisticTimerActive = false
+    _optimisticTimer = null
   }
 
   function useAdapter(adapter) {
@@ -154,12 +195,25 @@ Item {
   }
 
   function refreshProjects() {
+    if (requestPending("refreshProjects")) return false
     enqueue("refreshProjects", ["projects", "list"], {}, false)
   }
 
   function refreshEntries(fromDate, toDate) {
     lastEntryFrom = String(fromDate || lastEntryFrom || "")
     lastEntryTo = String(toDate || lastEntryTo || "")
+    if (_current && String(_current.intent || "") === "refreshEntries"
+        && String((_current.payload || {}).fromDate || "") === lastEntryFrom
+        && String((_current.payload || {}).toDate || "") === lastEntryTo) return false
+    for (var i = 0; i < _queue.length; i++) {
+      var queued = _queue[i]
+      if (String(queued.intent || "") === "refreshEntries"
+          && String((queued.payload || {}).fromDate || "") === lastEntryFrom
+          && String((queued.payload || {}).toDate || "") === lastEntryTo) return false
+    }
+    var retained = []
+    for (var j = 0; j < _queue.length; j++) if (String((_queue[j] || {}).intent || "") !== "refreshEntries") retained.push(_queue[j])
+    _queue = retained
     var argv = ["time", "list"]
     if (lastEntryFrom !== "") argv.push("--from", lastEntryFrom)
     if (lastEntryTo !== "") argv.push("--to", lastEntryTo)
@@ -167,17 +221,38 @@ Item {
   }
 
   function refreshRecentEntries() {
+    if (requestPending("refreshRecentEntries")) return false
     enqueue("refreshRecentEntries", ["time", "list", "--limit", "200"], {}, false)
+  }
+
+  function refreshView(view, fromDate, toDate) {
+    lastEntryFrom = String(fromDate || lastEntryFrom || "")
+    lastEntryTo = String(toDate || lastEntryTo || "")
+    if (!setupReady()) {
+      refreshDiagnostics()
+      return
+    }
+    refresh()
+    var target = String(view || "timer")
+    if (projects.length === 0) refreshProjects()
+    if (target === "projects") {
+      refreshProjects()
+      refreshRecentEntries()
+    } else if (target === "calendar") {
+      refreshEntries(lastEntryFrom, lastEntryTo)
+    }
   }
 
   function refreshAll(fromDate, toDate) {
     lastEntryFrom = String(fromDate || lastEntryFrom || "")
     lastEntryTo = String(toDate || lastEntryTo || "")
+    if (setupReady()) {
+      _fullRefreshRequested = false
+      refreshOperationalData()
+      return
+    }
     _fullRefreshRequested = true
     refreshDiagnostics()
-    if (!setupReady()) return
-    _fullRefreshRequested = false
-    refreshOperationalData()
   }
 
   function refreshOperationalData() {
@@ -188,6 +263,7 @@ Item {
   }
 
   function refreshDiagnostics() {
+    if (requestPending("refreshDiagnostics")) return false
     enqueue("refreshDiagnostics", ["diagnostics", "status"], {}, false)
   }
 
@@ -240,32 +316,44 @@ Item {
     var argv = ["timer", "start", "--project", String(projectId)]
     if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
     if (String(note || "") !== "") argv.push("--note", String(note))
-    enqueue("start", argv, { projectId: projectId }, true)
+    var payload = { projectId: projectId, serviceId: serviceId, note: String(note || "") }
+    if (enqueue("start", argv, payload, true)) applyOptimisticTimer("start", payload)
   }
 
   function pause() {
     if (!activeTimer) return
-    enqueue("pause", withSnapshot(["timer", "pause", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
+    var payload = { timerId: activeTimer.id }
+    if (enqueue("pause", withSnapshot(["timer", "pause", "--id", String(activeTimer.id)], activeTimer), payload, true))
+      applyOptimisticTimer("pause", payload)
   }
 
   function resume() {
     if (!activeTimer) return
-    enqueue("resume", withSnapshot(["timer", "resume", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
+    var payload = { timerId: activeTimer.id }
+    if (enqueue("resume", withSnapshot(["timer", "resume", "--id", String(activeTimer.id)], activeTimer), payload, true))
+      applyOptimisticTimer("resume", payload)
   }
 
   function correctDuration(seconds) {
     if (!activeTimer) return
-    enqueue("correctDuration", withSnapshot(["timer", "correct", "--id", String(activeTimer.id), "--duration", String(Math.max(0, Math.round(Number(seconds) || 0)))], activeTimer), { timerId: activeTimer.id }, true)
+    var duration = Math.max(0, Math.round(Number(seconds) || 0))
+    var payload = { timerId: activeTimer.id, durationSeconds: duration }
+    if (enqueue("correctDuration", withSnapshot(["timer", "correct", "--id", String(activeTimer.id), "--duration", String(duration)], activeTimer), payload, true))
+      applyOptimisticTimer("correctDuration", payload)
   }
 
   function updateTimerNote(note) {
     if (!activeTimer) return
-    enqueue("updateTimerNote", withSnapshot(["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")], activeTimer), { timerId: activeTimer.id }, true)
+    var payload = { timerId: activeTimer.id, note: String(note || "") }
+    if (enqueue("updateTimerNote", withSnapshot(["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")], activeTimer), payload, true))
+      applyOptimisticTimer("updateTimerNote", payload)
   }
 
   function logTimer() {
     if (!activeTimer) return
-    enqueue("log", withSnapshot(["timer", "log", "--id", String(activeTimer.id)], activeTimer), { timerId: activeTimer.id }, true)
+    var payload = { timerId: activeTimer.id }
+    if (enqueue("log", withSnapshot(["timer", "log", "--id", String(activeTimer.id)], activeTimer), payload, true))
+      applyOptimisticTimer("log", payload)
   }
 
   function switchTimer(projectId, serviceId) {
@@ -274,7 +362,8 @@ Item {
     if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
     if (activeTimer) argv.push("--id", String(activeTimer.id))
     argv = withSnapshot(argv, activeTimer)
-    enqueue("switch", argv, { projectId: projectId }, true)
+    var payload = { timerId: activeTimer ? activeTimer.id : "", projectId: projectId, serviceId: serviceId, note: "" }
+    if (enqueue("switch", argv, payload, true)) applyOptimisticTimer("switch", payload)
   }
 
   function appendFieldArguments(argv, fields) {
@@ -304,7 +393,7 @@ Item {
     // Establish a baseline for the exact target day before creating. If the
     // later write has an unknown outcome, only an ID absent from this baseline
     // can prove that FreshBooks accepted it.
-    enqueue("prepareCreateEntry", ["time", "list", "--from", targetDate, "--to", targetDate], payload, false)
+    enqueueNext("prepareCreateEntry", ["time", "list", "--from", targetDate, "--to", targetDate], payload, false)
   }
 
   function updateEntry(entryId, fields, snapshotToken) {
@@ -323,14 +412,20 @@ Item {
     if (mutation === true && (outcomeUnknown || conflictPending)) return false
     _requestSerial += 1
     var next = _queue.slice()
-    next.push({
+    var request = {
       id: "request-" + _requestSerial,
       intent: intent,
       argv: argv.slice(),
       payload: payload || {},
       mutation: mutation === true,
       stdin: stdin === undefined ? undefined : String(stdin)
-    })
+    }
+    if (requestIsInteractive(request)) {
+      var insertionIndex = 0
+      while (insertionIndex < next.length && requestIsInteractive(next[insertionIndex])) insertionIndex += 1
+      if (insertionIndex === 0) next.unshift(request)
+      else next.splice(insertionIndex, 0, request)
+    } else next.push(request)
     _queue = next
     pump()
     return true
@@ -425,6 +520,54 @@ Item {
     lastRefreshMs = Date.now()
   }
 
+  function anchoredTimer(record) {
+    if (!record || typeof record !== "object") return null
+    var result = {}
+    for (var key in record) result[key] = record[key]
+    if (result.observedAtMs === undefined) result.observedAtMs = Date.now()
+    return result
+  }
+
+  function adoptTimerMutation(intent, data, request) {
+    var action = String(intent || "")
+    var oldId = String((request && request.payload || {}).timerId || "")
+    var received = action === "switch" ? (data || {}).timer : data
+    var replacement = action === "log" ? null : anchoredTimer(received)
+    var replacementId = replacement ? String(replacement.id) : ""
+    var next = []
+    for (var i = 0; i < timers.length; i++) {
+      var candidateId = String((timers[i] || {}).id || "")
+      if ((oldId !== "" && candidateId === oldId) || (replacementId !== "" && candidateId === replacementId)) continue
+      next.push(timers[i])
+    }
+    if (replacement) next.push(replacement)
+    timers = next
+    selectedTimerId = replacement ? replacementId : (timers.length === 1 ? String(timers[0].id) : "")
+    snapshotStale = false
+    lastRefreshMs = Date.now()
+  }
+
+  function adoptEntryMutation(intent, data, request) {
+    var action = String(intent || "")
+    var payload = request && request.payload ? request.payload : {}
+    var targetId = action === "deleteEntry" ? String(payload.entryId || "") : String((data || {}).id || "")
+    var next = []
+    for (var i = 0; i < entries.length; i++) if (String((entries[i] || {}).id || "") !== targetId) next.push(entries[i])
+    if (action !== "deleteEntry" && data && typeof data === "object") next.push(data)
+    entries = next
+
+    if (action === "deleteEntry" || !data || typeof data !== "object") return
+    var recent = []
+    for (var j = 0; j < recentEntries.length; j++) if (String((recentEntries[j] || {}).id || "") !== String(data.id || "")) recent.push(recentEntries[j])
+    recent.unshift({
+      id: data.id,
+      projectId: data.projectId !== undefined ? data.projectId : payload.projectId,
+      serviceId: data.serviceId !== undefined ? data.serviceId : payload.serviceId,
+      startedAt: data.startedAt || new Date().toISOString()
+    })
+    recentEntries = recent
+  }
+
   function adoptEntryData(data) {
     var received = Array.isArray(data) ? data : []
     var draft = entryDraft || {}
@@ -495,10 +638,15 @@ Item {
     var reconcile = false
     var followupCreate = null
     var followupEntryRead = null
+    var refreshTimersAfter = false
+    var refreshEntriesAfter = false
+    var completedIntent = String(completed.intent || "")
+    var timerMutation = ["start", "pause", "resume", "correctDuration", "updateTimerNote", "log", "switch"].indexOf(completedIntent) !== -1
     _current = null
     if (completed.intent === "refreshTimers") _refreshQueued = false
 
     if (error) {
+      if (timerMutation) clearOptimisticTimer()
       var unresolvedOutcome = outcomeUnknown
       phase = "error"
       lastErrorCode = String(error.code || "UNKNOWN_ERROR")
@@ -640,6 +788,22 @@ Item {
           _unknownOriginalTo = ""
         }
       }
+      else if (timerMutation) {
+        if (!conflictPending) clearError()
+        if (completed.intent === "updateTimerNote") clearTimerNoteDraft()
+        if (completed.intent === "correctDuration") clearTimerDurationDraft()
+        if (completed.intent === "log") adoptEntryMutation("log", data, completed)
+        adoptTimerMutation(completed.intent, data, completed)
+        clearOptimisticTimer()
+        refreshTimersAfter = true
+        refreshEntriesAfter = completed.intent === "log" || completed.intent === "switch"
+      }
+      else if (["createEntry", "updateEntry", "deleteEntry"].indexOf(completedIntent) !== -1) {
+        if (!conflictPending) clearError()
+        adoptEntryMutation(completed.intent, data, completed)
+        clearEntryDraft()
+        refreshEntriesAfter = true
+      }
       else {
         if (!conflictPending) clearError()
         if ((completed.intent === "updateTimerNote" || completed.intent === "correctDuration") && data && data.snapshotToken)
@@ -651,11 +815,18 @@ Item {
       }
     }
     if (phase !== "error") phase = conflictPending ? "conflict" : (timerMode === "multiple" ? "ambiguous" : "ready")
-    // Mutation responses are authoritative, but their exact normalized shape
-    // belongs to the CLI contract. Reconcile the whole timer set before the
-    // next view treats it as current.
+    // Adopt authoritative mutation responses immediately, then refresh the
+    // affected collection quietly to catch changes made by another client.
     if (followupEntryRead) enqueueNext("refreshEntries", followupEntryRead.argv, followupEntryRead.payload, false)
     else if (followupCreate) enqueueNext("createEntry", followupCreate.argv, followupCreate.payload, true)
+    else if (refreshTimersAfter || refreshEntriesAfter) {
+      if (refreshTimersAfter) refresh()
+      if (refreshEntriesAfter) {
+        refreshRecentEntries()
+        refreshEntries(lastEntryFrom, lastEntryTo)
+      }
+      pump()
+    }
     else if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
     else pump()
   }

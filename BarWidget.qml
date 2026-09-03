@@ -14,7 +14,7 @@ BarWidget {
   readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
   readonly property string iconGlyph: "󰔛"
-  readonly property string uiRevision: "compact-timer-v1"
+  readonly property string uiRevision: "optimistic-ui-v1"
   readonly property string label: {
     if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"
@@ -45,6 +45,8 @@ BarWidget {
       timerMode: root.timerMode,
       running: root.activeTimer ? root.activeTimer.running === true : false,
       busy: root.timeTracking ? root.timeTracking.busy === true : false,
+      refreshing: root.timeTracking ? root.timeTracking.refreshing === true : false,
+      pendingIntent: root.timeTracking ? String(root.timeTracking.pendingIntent || "") : "",
       cliVersion: root.timeTracking ? String((root.timeTracking.diagnostics || {}).version || "") : "",
       configured: root.timeTracking ? (root.timeTracking.diagnostics || {}).configured === true : false,
       authenticated: root.timeTracking ? (root.timeTracking.diagnostics || {}).authenticated === true : false,

@@ -246,6 +246,37 @@ function formatTimerLabel(seconds) {
   return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
+function optimisticTimer(timer, intent, payload, nowMs) {
+  var action = String(intent || "")
+  var values = payload && typeof payload === "object" ? payload : {}
+  var observedAt = finiteNumber(nowMs, Date.now())
+
+  if (action === "log") return null
+  if (action === "start" || action === "switch") {
+    return {
+      id: "pending",
+      projectId: values.projectId,
+      serviceId: values.serviceId,
+      note: String(values.note || ""),
+      running: true,
+      elapsedSeconds: 0,
+      observedAtMs: observedAt,
+      snapshotToken: ""
+    }
+  }
+  if (!timer) return null
+
+  var result = {}
+  for (var key in timer) result[key] = timer[key]
+  result.elapsedSeconds = elapsedSeconds(timer, observedAt)
+  result.observedAtMs = observedAt
+  if (action === "pause") result.running = false
+  else if (action === "resume") result.running = true
+  else if (action === "correctDuration") result.elapsedSeconds = integerSeconds(values.durationSeconds)
+  else if (action === "updateTimerNote") result.note = String(values.note || "")
+  return result
+}
+
 function formatHoursMinutes(seconds) {
   var totalMinutes = Math.floor(integerSeconds(seconds) / 60)
   var hours = Math.floor(totalMinutes / 60)
@@ -397,6 +428,7 @@ if (typeof module !== "undefined") module.exports = {
   formatDuration: formatDuration,
   formatHoursMinutes: formatHoursMinutes,
   formatTimerLabel: formatTimerLabel,
+  optimisticTimer: optimisticTimer,
   parseDurationInput: parseDurationInput,
   projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,

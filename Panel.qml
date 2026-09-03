@@ -70,7 +70,21 @@ Panel {
   )
   readonly property color hoverContentColor: hoverContentRole === "background" ? Color.background : foreground
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
-  readonly property bool canMutate: timeTracking && !timeTracking.busy && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
+  readonly property bool canMutate: timeTracking && !timeTracking.mutationPending && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
+  readonly property string pendingIntent: timeTracking ? String(timeTracking.pendingIntent || "") : ""
+  readonly property bool timerActionPending: ["start", "pause", "resume", "correctDuration", "updateTimerNote", "log", "switch"].indexOf(pendingIntent) !== -1
+  readonly property bool entryActionPending: ["prepareCreateEntry", "createEntry", "updateEntry", "deleteEntry"].indexOf(pendingIntent) !== -1
+  readonly property string pendingMessage: {
+    if (pendingIntent === "start") return "Starting timer…"
+    if (pendingIntent === "pause") return "Pausing timer…"
+    if (pendingIntent === "resume") return "Resuming timer…"
+    if (pendingIntent === "correctDuration" || pendingIntent === "updateTimerNote") return "Saving timer…"
+    if (pendingIntent === "log") return "Logging time entry…"
+    if (pendingIntent === "switch") return "Switching timers…"
+    if (pendingIntent === "deleteEntry") return "Deleting time entry…"
+    if (entryActionPending) return "Saving time entry…"
+    return ""
+  }
 
   SystemClock {
     id: panelClock
@@ -108,15 +122,17 @@ Panel {
     if (!timeTracking) return
     if (timeTracking.outcomeUnknown && timeTracking.retryUnknownRefresh()) return
     var cells = monthCells
-    timeTracking.refreshAll(cells.length ? cells[0].key : "", cells.length ? cells[cells.length - 1].key : "")
+    timeTracking.refreshView(tab, cells.length ? cells[0].key : "", cells.length ? cells[cells.length - 1].key : "")
   }
 
   function open() {
     cursorActive = false
     hydrateDrafts()
-    refresh()
     controller.show()
-    if (timeTracking) timeTracking.registerVisibleConsumer(consumerId)
+    if (timeTracking) {
+      timeTracking.registerVisibleConsumer(consumerId)
+      refresh()
+    }
   }
 
   function close() {
@@ -139,6 +155,7 @@ Panel {
     tab = tabs[(index + (direction > 0 ? 1 : 2)) % 3]
     keyboardCursor = 0
     calendarGridFocused = tab === "calendar"
+    Qt.callLater(root.refresh)
   }
 
   function moveKeyboardCursor(dx, dy) {
@@ -167,7 +184,7 @@ Panel {
       cursorActive = true
       return
     }
-    if (!timeTracking || timeTracking.busy) return
+    if (!timeTracking || timeTracking.mutationPending || timeTracking.outcomeUnknown || timeTracking.conflictPending) return
     if (tab === "timer") {
       if (keyboardCursor === 0) noteField.forceActiveFocus()
       else if (keyboardCursor === 1) durationField.forceActiveFocus()
@@ -289,7 +306,7 @@ Panel {
   }
 
   function startShortcut(shortcut) {
-    if (!timeTracking || !shortcut) return
+    if (!timeTracking || !shortcut || !canMutate) return
     var active = timeTracking.activeTimer
     var sameShortcut = active && String(active.projectId) === String(shortcut.projectId)
       && String(active.serviceId) === String(shortcut.serviceId)
@@ -360,7 +377,7 @@ Panel {
 
   function saveEntry() {
     var seconds = Model.parseDurationInput(entryDurationField.text)
-    if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey) || !timeTracking) return
+    if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey) || !timeTracking || !canMutate) return
     var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
     if (entryEditorMode === "create" || entryDateKey !== entryOriginalDateKey) fields.localDate = entryDateKey
     if (entryEditorMode === "create") timeTracking.createEntry(fields)
@@ -568,6 +585,7 @@ Panel {
                 root.tab = modelData
                 root.keyboardCursor = 0
                 root.calendarGridFocused = modelData === "calendar"
+                Qt.callLater(root.refresh)
               }
             }
           }
@@ -632,7 +650,7 @@ Panel {
               enabled: root.timeTracking && root.timeTracking.activeTimer
               placeholderText: "Notes"
               onTextEdited: root.persistTimerNoteDraft()
-              onEditingFinished: if (root.timeTracking && enabled && text !== String(root.timeTracking.activeTimer.note || "")) root.timeTracking.updateTimerNote(text)
+              onEditingFinished: if (root.timeTracking && enabled && !root.timeTracking.mutationPending && text !== String(root.timeTracking.activeTimer.note || "")) root.timeTracking.updateTimerNote(text)
             }
             TextField {
               id: durationField
@@ -642,26 +660,53 @@ Panel {
               onTextEdited: root.persistTimerDurationDraft()
               onEditingFinished: {
                 var seconds = Model.parseDurationInput(text)
-                if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.busy) root.timeTracking.correctDuration(seconds)
+                if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.mutationPending) root.timeTracking.correctDuration(seconds)
                 else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
               }
             }
-            Text { visible: root.timeTracking && root.timeTracking.busy; text: "Saving or refreshing…"; color: Qt.darker(root.foreground, 1.25); font.family: root.fontFamily; horizontalAlignment: Text.AlignHCenter; width: parent.width }
+            Text {
+              visible: root.timerActionPending || (root.timeTracking && root.timeTracking.refreshing)
+              text: root.timerActionPending ? root.pendingMessage : "Refreshing FreshBooks…"
+              color: Qt.darker(root.foreground, 1.25)
+              font.family: root.fontFamily
+              horizontalAlignment: Text.AlignHCenter
+              width: parent.width
+            }
             Row {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(8)
               ActionButton {
                 cursorIndex: 2
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 2
-                label: root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"
+                label: root.pendingIntent === "pause" ? "Pausing…"
+                  : (root.pendingIntent === "resume" ? "Resuming…"
+                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"))
+                iconText: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰑮" : ""
+                iconSpinning: root.pendingIntent === "pause" || root.pendingIntent === "resume"
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: {
                   if (root.timeTracking.activeTimer.running) root.timeTracking.pause()
                   else root.timeTracking.resume()
                 }
               }
-              ActionButton { cursorIndex: 3; hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3; label: "Log"; enabled: root.canMutate && root.timeTracking.activeTimer; onTriggered: root.timeTracking.logTimer() }
-              ActionButton { cursorIndex: 4; hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 4; label: "Refresh"; enabled: root.timeTracking && !root.timeTracking.busy; onTriggered: root.refresh() }
+              ActionButton {
+                cursorIndex: 3
+                hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3
+                label: root.pendingIntent === "log" ? "Logging…" : "Log"
+                iconText: root.pendingIntent === "log" ? "󰑮" : ""
+                iconSpinning: root.pendingIntent === "log"
+                enabled: root.canMutate && root.timeTracking.activeTimer
+                onTriggered: root.timeTracking.logTimer()
+              }
+              ActionButton {
+                cursorIndex: 4
+                hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 4
+                label: "Refresh"
+                iconText: "󰑐"
+                iconSpinning: root.timeTracking && root.timeTracking.refreshing
+                enabled: root.timeTracking && !root.timeTracking.refreshing
+                onTriggered: root.refresh()
+              }
             }
             Text {
               visible: root.timeTracking && root.timeTracking.lastError !== ""
@@ -695,9 +740,21 @@ Panel {
             anchors.fill: parent
             spacing: Style.space(8)
             TextField { id: searchField; width: parent.width; placeholderText: "Search projects or clients"; text: root.projectSearch; onTextChanged: root.projectSearch = text }
+            Text {
+              id: projectStatus
+              visible: root.timerActionPending || (root.timeTracking && root.timeTracking.refreshing)
+              width: parent.width
+              text: root.timerActionPending ? root.pendingMessage : "Refreshing FreshBooks…"
+              color: Qt.darker(root.foreground, 1.25)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              horizontalAlignment: Text.AlignHCenter
+            }
             Flickable {
               width: parent.width
-              height: parent.height - searchField.height - Style.space(8)
+              height: parent.height - searchField.height
+                - (projectStatus.visible ? projectStatus.implicitHeight + Style.space(8) : 0)
+                - Style.space(8)
               contentHeight: projectColumn.implicitHeight
               clip: true
               Column {
@@ -767,19 +824,31 @@ Panel {
                     }
                     PanelActionButton {
                       id: projectAction
+                      readonly property bool pending: root.timerActionPending
+                        && String((root.timeTracking.pendingPayload || {}).projectId || "") === String(modelData.projectId)
+                        && String((root.timeTracking.pendingPayload || {}).serviceId || "") === String(modelData.serviceId)
                       anchors.right: parent.right
                       anchors.rightMargin: Style.space(6)
                       anchors.verticalCenter: parent.verticalCenter
-                      iconText: root.timeTracking && root.timeTracking.activeTimer
-                        && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
-                        && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
-                        && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊"
-                      tooltipText: iconText === "󰏤" ? "Pause timer" : "Start timer"
+                      iconText: pending ? "󰑮"
+                        : (root.timeTracking && root.timeTracking.activeTimer
+                          && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
+                          && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
+                          && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊")
+                      tooltipText: pending ? root.pendingMessage : (iconText === "󰏤" ? "Pause timer" : "Start timer")
                       foreground: projectRow.contentColor
                       hoverColor: projectRow.contentColor
                       fontFamily: root.fontFamily
                       fontSize: Style.font.title
                       enabled: root.canMutate
+                      rotation: pending ? 0 : 0
+                      RotationAnimation on rotation {
+                        from: 0
+                        to: 360
+                        duration: 900
+                        loops: Animation.Infinite
+                        running: projectAction.pending
+                      }
                       onHovered: function(h) {
                         if (!h) return
                         root.cursorActive = true
@@ -799,10 +868,16 @@ Panel {
             spacing: Style.space(8)
             Text {
               width: parent.width
-              visible: root.timeTracking && root.timeTracking.activeTimer
-              text: root.timeTracking && root.timeTracking.activeTimer
-                ? "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
-                : ""
+              visible: root.pendingMessage !== "" || (root.timeTracking && (root.timeTracking.activeTimer || root.timeTracking.refreshing))
+              text: {
+                if (root.pendingMessage !== "") return root.pendingMessage
+                var message = root.timeTracking && root.timeTracking.activeTimer
+                  ? "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
+                  : ""
+                if (root.timeTracking && root.timeTracking.refreshing)
+                  message += (message === "" ? "" : " · ") + "Refreshing FreshBooks…"
+                return message
+              }
               color: Color.accent
               font.family: root.fontFamily
               horizontalAlignment: Text.AlignHCenter
@@ -985,13 +1060,21 @@ Panel {
               }
               Row {
                 spacing: Style.space(8)
-                ActionButton { label: "Save"; enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey); onTriggered: root.saveEntry() }
+                ActionButton {
+                  label: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "Saving…" : "Save"
+                  iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰑮" : ""
+                  iconSpinning: root.entryActionPending && root.pendingIntent !== "deleteEntry"
+                  enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
+                  onTriggered: root.saveEntry()
+                }
                 ActionButton { label: "Cancel"; onTriggered: root.cancelEntryEditor() }
                 ActionButton {
                   id: deleteEntryButton
                   visible: root.entryEditorMode === "edit"
                   enabled: root.canMutate
-                  label: root.confirmingDelete ? "Delete now" : "Delete"
+                  label: root.pendingIntent === "deleteEntry" ? "Deleting…" : (root.confirmingDelete ? "Delete now" : "Delete")
+                  iconText: root.pendingIntent === "deleteEntry" ? "󰑮" : ""
+                  iconSpinning: root.pendingIntent === "deleteEntry"
                   onTriggered: {
                     if (!root.confirmingDelete) root.confirmingDelete = true
                     else {

@@ -89,6 +89,51 @@ test('omits a zero hour from the bar timer label', () => {
   assert.equal(model.formatTimerLabel(3661), '01:01:01')
 })
 
+test('projects timer mutations immediately while FreshBooks is pending', () => {
+  const observedAtMs = Date.parse('2026-09-03T15:00:00Z')
+  const nowMs = observedAtMs + 5000
+  const running = {
+    id: 42,
+    projectId: 7,
+    serviceId: 9,
+    note: 'Work',
+    running: true,
+    elapsedSeconds: 120,
+    observedAtMs
+  }
+
+  assert.deepEqual(model.optimisticTimer(running, 'pause', {}, nowMs), {
+    ...running,
+    running: false,
+    elapsedSeconds: 125,
+    observedAtMs: nowMs
+  })
+  assert.deepEqual(model.optimisticTimer({ ...running, running: false }, 'resume', {}, nowMs), {
+    ...running,
+    running: true,
+    elapsedSeconds: 120,
+    observedAtMs: nowMs
+  })
+  assert.equal(model.optimisticTimer(running, 'correctDuration', { durationSeconds: 3600 }, nowMs).elapsedSeconds, 3600)
+  assert.equal(model.optimisticTimer(running, 'updateTimerNote', { note: 'Updated' }, nowMs).note, 'Updated')
+  assert.equal(model.optimisticTimer(running, 'log', {}, nowMs), null)
+  assert.deepEqual(model.optimisticTimer(null, 'start', {
+    projectId: 8,
+    serviceId: 10,
+    note: 'New work'
+  }, nowMs), {
+    id: 'pending',
+    projectId: 8,
+    serviceId: 10,
+    note: 'New work',
+    running: true,
+    elapsedSeconds: 0,
+    observedAtMs: nowMs,
+    snapshotToken: ''
+  })
+  assert.equal(model.optimisticTimer(running, 'switch', { projectId: 11, serviceId: 12 }, nowMs).projectId, 11)
+})
+
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('10:00'), 36000)
   assert.equal(model.parseDurationInput('00:01:30'), 90)
