@@ -237,6 +237,15 @@ function formatDuration(seconds) {
   return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
+function formatTimerLabel(seconds) {
+  var value = integerSeconds(seconds)
+  var hours = Math.floor(value / 3600)
+  var minutes = Math.floor((value % 3600) / 60)
+  var remainder = value % 60
+  if (hours === 0) return pad2(minutes) + ":" + pad2(remainder)
+  return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
+}
+
 function formatHoursMinutes(seconds) {
   var totalMinutes = Math.floor(integerSeconds(seconds) / 60)
   var hours = Math.floor(totalMinutes / 60)
@@ -387,6 +396,7 @@ if (typeof module !== "undefined") module.exports = {
   entryDateKey: entryDateKey,
   formatDuration: formatDuration,
   formatHoursMinutes: formatHoursMinutes,
+  formatTimerLabel: formatTimerLabel,
   parseDurationInput: parseDurationInput,
   projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,

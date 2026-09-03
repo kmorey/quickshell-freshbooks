@@ -81,6 +81,14 @@ test('ticks a running Active Timer from the confirmed observation and never tick
   assert.equal(model.formatHoursMinutes(59), '00:00')
 })
 
+test('omits a zero hour from the bar timer label', () => {
+  assert.equal(model.formatTimerLabel(0), '00:00')
+  assert.equal(model.formatTimerLabel(59), '00:59')
+  assert.equal(model.formatTimerLabel(3599), '59:59')
+  assert.equal(model.formatTimerLabel(3600), '01:00:00')
+  assert.equal(model.formatTimerLabel(3661), '01:01:01')
+})
+
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('10:00'), 36000)
   assert.equal(model.parseDurationInput('00:01:30'), 90)
