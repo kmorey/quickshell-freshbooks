@@ -231,6 +231,13 @@ Panel {
     return project && Array.isArray(project.services) && project.services.length ? project.services[0].id : null
   }
 
+  function serviceName(project, serviceId) {
+    if (!project || !Array.isArray(project.services)) return ""
+    for (var i = 0; i < project.services.length; i++)
+      if (String(project.services[i].id) === String(serviceId)) return String(project.services[i].name || "")
+    return ""
+  }
+
   function hydrateDrafts() {
     if (!timeTracking) return
     var timer = timeTracking.activeTimer
@@ -616,31 +623,60 @@ Panel {
               }
             }
 
-            PanelHero {
+            Item {
+              id: timerHeader
               width: parent.width
-              title: {
-                if (!root.timeTracking || !root.timeTracking.activeTimer) return "No active timer"
-                var project = root.projectById(root.timeTracking.activeTimer.projectId)
-                return project
-                  ? String(project.clientName || "Internal") + " · " + String(project.title || "Project")
-                  : "Active timer"
-              }
-              meta: root.timeTracking && root.timeTracking.activeTimer
-                ? String(root.timeTracking.activeTimer.note || "Untitled work")
-                : "Choose a project to begin"
-              detail: root.timeTracking && root.timeTracking.activeTimer
-                ? Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
-                : ""
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              iconOpacity: root.timeTracking && root.timeTracking.activeTimer ? 1 : 0.5
-              iconComponent: Component {
-                Text {
-                  textFormat: Text.PlainText
-                  text: "󰔛"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.display
+              implicitHeight: timerHero.implicitHeight
+              readonly property bool refreshing: root.timeTracking && root.timeTracking.refreshing
+              readonly property bool refreshCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 4
+              function focusRefresh() { root.cursorActive = true; root.keyboardCursor = 4 }
+              function refreshNow() { root.refresh() }
+
+              PanelHero {
+                id: timerHero
+                width: parent.width
+                title: {
+                  if (!root.timeTracking || !root.timeTracking.activeTimer) return "No active timer"
+                  var project = root.projectById(root.timeTracking.activeTimer.projectId)
+                  return project ? String(project.title || "Project") : "Active timer"
+                }
+                meta: {
+                  if (!root.timeTracking || !root.timeTracking.activeTimer) return "Choose a project to begin"
+                  var project = root.projectById(root.timeTracking.activeTimer.projectId)
+                  if (!project) return "FreshBooks timer"
+                  var client = String(project.clientName || "Internal")
+                  var service = root.serviceName(project, root.timeTracking.activeTimer.serviceId)
+                  return client + (service === "" ? "" : " · " + service)
+                }
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                iconOpacity: root.timeTracking && root.timeTracking.activeTimer ? 1 : 0.5
+                iconComponent: Component {
+                  Text {
+                    textFormat: Text.PlainText
+                    text: "󰔛"
+                    color: timerHero.foreground
+                    font.family: timerHero.fontFamily
+                    font.pixelSize: Style.font.display
+                  }
+                }
+                trailingControl: Component {
+                  Button {
+                    iconText: "󰑐"
+                    tooltipText: "Refresh FreshBooks"
+                    iconSpinning: timerHeader.refreshing
+                    enabled: !timerHeader.refreshing
+                    hasCursor: timerHeader.refreshCursor
+                    focusable: true
+                    bordered: true
+                    foreground: timerHero.foreground
+                    accent: Color.accent
+                    fontFamily: timerHero.fontFamily
+                    horizontalPadding: Style.spacing.controlGap
+                    verticalPadding: Style.spacing.labelGap
+                    onHovered: function(h) { if (h) timerHeader.focusRefresh() }
+                    onClicked: timerHeader.refreshNow()
+                  }
                 }
               }
             }
@@ -665,8 +701,8 @@ Panel {
               }
             }
             Text {
-              visible: root.timerActionPending || (root.timeTracking && root.timeTracking.refreshing)
-              text: root.timerActionPending ? root.pendingMessage : "Refreshing FreshBooks…"
+              visible: root.timerActionPending
+              text: root.pendingMessage
               color: Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
               horizontalAlignment: Text.AlignHCenter
@@ -676,17 +712,39 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(8)
               ActionButton {
+                id: timerToggleButton
                 cursorIndex: 2
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 2
-                label: root.pendingIntent === "pause" ? "Pausing…"
-                  : (root.pendingIntent === "resume" ? "Resuming…"
-                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause" : "Resume"))
-                iconText: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰑮" : ""
-                iconSpinning: root.pendingIntent === "pause" || root.pendingIntent === "resume"
+                label: ""
+                tooltipText: root.pendingIntent === "pause" ? "Pausing timer"
+                  : (root.pendingIntent === "resume" ? "Resuming timer"
+                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause timer" : "Resume timer"))
+                active: true
+                implicitWidth: Style.space(58)
+                implicitHeight: Style.space(38)
+                opacity: (enabled || root.pendingIntent === "pause" || root.pendingIntent === "resume") ? 1 : 0.45
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: {
                   if (root.timeTracking.activeTimer.running) root.timeTracking.pause()
                   else root.timeTracking.resume()
+                }
+                Text {
+                  id: timerToggleGlyph
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰑮"
+                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊")
+                  color: timerToggleButton.hot ? root.hoverContentColor : root.selectedContentColor
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                  rotation: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? 0 : 0
+                  RotationAnimation on rotation {
+                    from: 0
+                    to: 360
+                    duration: 900
+                    loops: Animation.Infinite
+                    running: root.pendingIntent === "pause" || root.pendingIntent === "resume"
+                  }
                 }
               }
               ActionButton {
@@ -697,15 +755,6 @@ Panel {
                 iconSpinning: root.pendingIntent === "log"
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: root.timeTracking.logTimer()
-              }
-              ActionButton {
-                cursorIndex: 4
-                hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 4
-                label: "Refresh"
-                iconText: "󰑐"
-                iconSpinning: root.timeTracking && root.timeTracking.refreshing
-                enabled: root.timeTracking && !root.timeTracking.refreshing
-                onTriggered: root.refresh()
               }
             }
             Text {
@@ -742,9 +791,9 @@ Panel {
             TextField { id: searchField; width: parent.width; placeholderText: "Search projects or clients"; text: root.projectSearch; onTextChanged: root.projectSearch = text }
             Text {
               id: projectStatus
-              visible: root.timerActionPending || (root.timeTracking && root.timeTracking.refreshing)
+              visible: root.timerActionPending
               width: parent.width
-              text: root.timerActionPending ? root.pendingMessage : "Refreshing FreshBooks…"
+              text: root.pendingMessage
               color: Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -868,15 +917,12 @@ Panel {
             spacing: Style.space(8)
             Text {
               width: parent.width
-              visible: root.pendingMessage !== "" || (root.timeTracking && (root.timeTracking.activeTimer || root.timeTracking.refreshing))
+              visible: root.pendingMessage !== "" || (root.timeTracking && root.timeTracking.activeTimer)
               text: {
                 if (root.pendingMessage !== "") return root.pendingMessage
-                var message = root.timeTracking && root.timeTracking.activeTimer
+                return root.timeTracking && root.timeTracking.activeTimer
                   ? "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
                   : ""
-                if (root.timeTracking && root.timeTracking.refreshing)
-                  message += (message === "" ? "" : " · ") + "Refreshing FreshBooks…"
-                return message
               }
               color: Color.accent
               font.family: root.fontFamily
@@ -1111,7 +1157,7 @@ Panel {
     accent: Color.accent
     fontFamily: root.fontFamily
     fontSize: Style.font.body
-    opacity: enabled ? 1 : 0.45
+    opacity: enabled || iconSpinning ? 1 : 0.45
 
     onHovered: function(h) {
       if (!h) return
