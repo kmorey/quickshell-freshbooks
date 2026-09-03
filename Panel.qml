@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
@@ -53,6 +54,10 @@ Panel {
   property bool entryDraftDirty: false
   property bool confirmingDelete: false
   property string entrySnapshotToken: ""
+  onEntryEditorModeChanged: {
+    if (entryEditorMode === "closed") Qt.callLater(function() { calendarViewport.contentY = 0 })
+    else revealEntryEditor()
+  }
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string selectedContentRole: Model.readableContentRole(
@@ -218,6 +223,14 @@ Panel {
     entryEditorMode = "closed"
     editingEntryId = ""
     if (timeTracking) timeTracking.clearEntryDraft()
+  }
+
+  function revealEntryEditor() {
+    if (entryEditorMode === "closed") return
+    Qt.callLater(function() {
+      var maximum = Math.max(0, calendarViewport.contentHeight - calendarViewport.height)
+      calendarViewport.contentY = Math.min(Math.max(0, calendarEditor.y), maximum)
+    })
   }
 
   function moveMonth(delta) {
@@ -911,11 +924,23 @@ Panel {
             }
           }
 
-          Column {
+          Flickable {
+            id: calendarViewport
             visible: root.tab === "calendar"
             anchors.fill: parent
-            spacing: Style.space(8)
-            Text {
+            contentWidth: width
+            contentHeight: calendarContent.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Column {
+              id: calendarContent
+              width: calendarViewport.width
+              spacing: Style.space(8)
+              Text {
               width: parent.width
               visible: root.pendingMessage !== "" || (root.timeTracking && root.timeTracking.activeTimer)
               text: {
@@ -1009,48 +1034,43 @@ Panel {
               Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
               ActionButton { id: addEntryButton; cursorIndex: 0; hasCursor: root.cursorActive && root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; calendarListTarget: true; onTriggered: root.beginAddEntry() }
             }
-            Flickable {
+            Column {
               visible: root.entryEditorMode === "closed"
               width: parent.width
-              height: parent.height - calendarGrid.height - Style.space(86)
-              contentHeight: entryColumn.implicitHeight
-              clip: true
-              Column {
-                id: entryColumn
-                width: parent.width
-                spacing: Style.space(4)
-                Repeater {
-                  model: root.dayEntries
-                  CursorSurface {
-                    id: entryRow
-                    required property var modelData
-                    required property int index
-                    readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
-                    width: entryColumn.width
-                    height: Style.space(38)
-                    hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index + 1
-                    foreground: root.foreground
-                    accent: Color.accent
-                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
-                    Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
-                    MouseArea {
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onContainsMouseChanged: {
-                        if (!containsMouse) return
-                        root.cursorActive = true
-                        root.keyboardCursor = index + 1
-                        root.calendarGridFocused = false
-                      }
-                      onClicked: root.beginEditEntry(modelData)
+              id: entryColumn
+              spacing: Style.space(4)
+              Repeater {
+                model: root.dayEntries
+                CursorSurface {
+                  id: entryRow
+                  required property var modelData
+                  required property int index
+                  readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
+                  width: entryColumn.width
+                  height: Style.space(38)
+                  hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index + 1
+                  foreground: root.foreground
+                  accent: Color.accent
+                  Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
+                  Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onContainsMouseChanged: {
+                      if (!containsMouse) return
+                      root.cursorActive = true
+                      root.keyboardCursor = index + 1
+                      root.calendarGridFocused = false
                     }
+                    onClicked: root.beginEditEntry(modelData)
                   }
                 }
               }
             }
 
             Column {
+              id: calendarEditor
               visible: root.entryEditorMode !== "closed"
               width: parent.width
               spacing: Style.space(7)
@@ -1137,6 +1157,7 @@ Panel {
                 ActionButton { label: "Apply my entry"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
               }
             }
+          }
           }
         }
       }
