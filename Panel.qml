@@ -257,7 +257,9 @@ Panel {
     if (timer) {
       var matchingDraft = String(timeTracking.draftTimerId || "") === String(timer.id)
       noteField.text = matchingDraft && timeTracking.draftTimerNoteDirty ? timeTracking.draftTimerNote : String(timer.note || "")
-      durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty ? timeTracking.draftTimerDuration : Model.formatDuration(timer.elapsedSeconds)
+      durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty
+        ? timeTracking.draftTimerDuration
+        : Model.formatDuration(Model.logicalTimerElapsedSeconds(timer, panelClock.date.getTime()))
     } else {
       noteField.text = ""
       durationField.text = ""
@@ -630,7 +632,7 @@ Panel {
                 model: root.timeTracking ? root.timeTracking.timers : []
                 ActionButton {
                   required property var modelData
-                  label: Model.formatDuration(modelData.elapsedSeconds) + "  " + String(modelData.note || "Untitled timer")
+                  label: Model.formatDuration(Model.logicalTimerElapsedSeconds(modelData, panelClock.date.getTime())) + "  " + String(modelData.note || "Untitled timer")
                   onTriggered: root.timeTracking.selectTimer(modelData.id)
                 }
               }
@@ -710,7 +712,7 @@ Panel {
               onEditingFinished: {
                 var seconds = Model.parseDurationInput(text)
                 if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.mutationPending) root.timeTracking.correctDuration(seconds)
-                else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
+                else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
               }
             }
             Text {
@@ -792,7 +794,7 @@ Panel {
                   Qt.callLater(function() {
                     if (root.timeTracking.activeTimer) {
                       noteField.text = String(root.timeTracking.activeTimer.note || "")
-                      durationField.text = Model.formatDuration(root.timeTracking.activeTimer.elapsedSeconds)
+                      durationField.text = Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
                     }
                   })
                 }
@@ -950,7 +952,7 @@ Panel {
               text: {
                 if (root.pendingMessage !== "") return root.pendingMessage
                 return root.timeTracking && root.timeTracking.activeTimer
-                  ? "Active timer · " + Model.formatDuration(Model.elapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
+                  ? "Active timer · " + Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
                   : ""
               }
               color: Color.accent

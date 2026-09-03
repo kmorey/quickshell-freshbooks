@@ -81,12 +81,33 @@ test('ticks a running Active Timer from the confirmed observation and never tick
   assert.equal(model.formatHoursMinutes(59), '00:00')
 })
 
+test('sums unique Timer Segments for the full resumed Active Timer duration', () => {
+  const nowMs = Date.parse('2026-09-03T15:00:00Z')
+  const timer = {
+    elapsedSeconds: 600,
+    running: true,
+    observedAtMs: nowMs,
+    segments: [
+      { id: 'segment-1', durationSeconds: 7200, running: false },
+      { id: 'segment-1', durationSeconds: 7200, running: false },
+      { id: 'segment-2', durationSeconds: null, running: true, startedAt: '2026-09-03T14:50:00Z' }
+    ]
+  }
+
+  assert.equal(model.logicalTimerElapsedSeconds(timer, nowMs), 7800)
+  const paused = model.optimisticTimer(timer, 'pause', {}, nowMs)
+  assert.equal(model.logicalTimerElapsedSeconds(paused, nowMs + 5000), 7800)
+  const resumed = model.optimisticTimer(paused, 'resume', {}, nowMs + 5000)
+  assert.equal(model.logicalTimerElapsedSeconds(resumed, nowMs + 10000), 7805)
+})
+
 test('omits a zero hour from the bar timer label', () => {
   assert.equal(model.formatTimerLabel(0), '00:00')
   assert.equal(model.formatTimerLabel(59), '00:59')
   assert.equal(model.formatTimerLabel(3599), '59:59')
-  assert.equal(model.formatTimerLabel(3600), '01:00:00')
-  assert.equal(model.formatTimerLabel(3661), '01:01:01')
+  assert.equal(model.formatTimerLabel(3600), '1:00:00')
+  assert.equal(model.formatTimerLabel(3661), '1:01:01')
+  assert.equal(model.formatTimerLabel(15081), '4:11:21')
 })
 
 test('projects timer mutations immediately while FreshBooks is pending', () => {

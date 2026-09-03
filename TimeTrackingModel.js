@@ -229,6 +229,34 @@ function elapsedSeconds(timer, nowMs) {
   return confirmed + Math.max(0, Math.floor((now - observedAt) / 1000))
 }
 
+function logicalTimerElapsedSeconds(timer, nowMs) {
+  if (!timer) return 0
+  var segments = asArray(timer.segments)
+  if (segments.length === 0) return elapsedSeconds(timer, nowMs)
+
+  var seen = {}
+  var total = 0
+  var now = finiteNumber(nowMs, Date.now())
+  for (var i = segments.length - 1; i >= 0; i--) {
+    var segment = segments[i] || {}
+    var id = segment.id === undefined || segment.id === null ? "anonymous-" + i : String(segment.id)
+    if (seen[id]) continue
+    seen[id] = true
+
+    var duration = segment.durationSeconds !== undefined ? segment.durationSeconds : segment.duration
+    var running = segment.running === true || duration === null
+    if (!running && duration !== undefined) {
+      total += integerSeconds(duration)
+      continue
+    }
+
+    var startedAt = Date.parse(String(segment.startedAt || segment.started_at || ""))
+    if (!isFinite(startedAt)) return elapsedSeconds(timer, nowMs)
+    total += Math.max(0, Math.floor((now - startedAt) / 1000))
+  }
+  return total
+}
+
 function formatDuration(seconds) {
   var value = integerSeconds(seconds)
   var hours = Math.floor(value / 3600)
@@ -243,7 +271,7 @@ function formatTimerLabel(seconds) {
   var minutes = Math.floor((value % 3600) / 60)
   var remainder = value % 60
   if (hours === 0) return pad2(minutes) + ":" + pad2(remainder)
-  return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(remainder)
+  return hours + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
 function optimisticTimer(timer, intent, payload, nowMs) {
@@ -268,11 +296,20 @@ function optimisticTimer(timer, intent, payload, nowMs) {
 
   var result = {}
   for (var key in timer) result[key] = timer[key]
-  result.elapsedSeconds = elapsedSeconds(timer, observedAt)
+  result.elapsedSeconds = logicalTimerElapsedSeconds(timer, observedAt)
   result.observedAtMs = observedAt
-  if (action === "pause") result.running = false
-  else if (action === "resume") result.running = true
-  else if (action === "correctDuration") result.elapsedSeconds = integerSeconds(values.durationSeconds)
+  if (action === "pause") {
+    result.running = false
+    if (Array.isArray(result.segments)) result.segments = []
+  }
+  else if (action === "resume") {
+    result.running = true
+    if (Array.isArray(result.segments)) result.segments = []
+  }
+  else if (action === "correctDuration") {
+    result.elapsedSeconds = integerSeconds(values.durationSeconds)
+    if (Array.isArray(result.segments)) result.segments = []
+  }
   else if (action === "updateTimerNote") result.note = String(values.note || "")
   return result
 }
@@ -428,6 +465,7 @@ if (typeof module !== "undefined") module.exports = {
   formatDuration: formatDuration,
   formatHoursMinutes: formatHoursMinutes,
   formatTimerLabel: formatTimerLabel,
+  logicalTimerElapsedSeconds: logicalTimerElapsedSeconds,
   optimisticTimer: optimisticTimer,
   parseDurationInput: parseDurationInput,
   projectShortcuts: projectShortcuts,

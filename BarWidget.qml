@@ -14,12 +14,12 @@ BarWidget {
   readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
   readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
   readonly property string iconGlyph: "󰔛"
-  readonly property string uiRevision: "balanced-save-controls-v1"
+  readonly property string uiRevision: "logical-timer-total-v1"
   readonly property string label: {
     if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"
     if (!activeTimer) return ""
-    return Model.formatTimerLabel(Model.elapsedSeconds(activeTimer, clock.date.getTime()))
+    return Model.formatTimerLabel(Model.logicalTimerElapsedSeconds(activeTimer, clock.date.getTime()))
   }
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
