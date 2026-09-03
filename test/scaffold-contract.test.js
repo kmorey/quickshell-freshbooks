@@ -165,7 +165,7 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /active:\s*root\.tab === modelData/)
   assert.doesNotMatch(panel, /selected:\s*root\.tab === modelData/)
   assert.ok((panel.match(/root\.selectedContentColor/g) || []).length >= 4)
-  assert.match(widget, /uiRevision:\s*"calendar-scroll-v1"/)
+  assert.match(widget, /uiRevision:\s*"balanced-save-controls-v1"/)
   assert.match(widget, /Model\.formatTimerLabel/)
   assert.match(widget, /selectedContentRole:/)
   assert.match(panel, /return root\.timeTracking && root\.timeTracking\.activeTimer\s*\? "Active timer/)
@@ -181,6 +181,8 @@ test('ships timer, project, and calendar workflows in one keyboard panel', () =>
   assert.match(panel, /id:\s*timerToggleButton/)
   assert.match(panel, /active:\s*true/)
   assert.match(panel, /id:\s*timerToggleGlyph[\s\S]{0,600}󰏤[\s\S]{0,200}󰐊/)
+  assert.match(panel, /id:\s*timerSaveButton[\s\S]{0,300}label:\s*root\.pendingIntent === "log" \? "" : "Save"/)
+  assert.match(panel, /implicitWidth:\s*timerToggleButton\.implicitWidth\s*\n\s*implicitHeight:\s*timerToggleButton\.implicitHeight/)
 })
 
 test('contains the calendar and entry editor inside the popup viewport', () => {

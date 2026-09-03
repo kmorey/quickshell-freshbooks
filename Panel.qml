@@ -84,7 +84,7 @@ Panel {
     if (pendingIntent === "pause") return "Pausing timer…"
     if (pendingIntent === "resume") return "Resuming timer…"
     if (pendingIntent === "correctDuration" || pendingIntent === "updateTimerNote") return "Saving timer…"
-    if (pendingIntent === "log") return "Logging time entry…"
+    if (pendingIntent === "log") return "Saving time entry…"
     if (pendingIntent === "switch") return "Switching timers…"
     if (pendingIntent === "deleteEntry") return "Deleting time entry…"
     if (entryActionPending) return "Saving time entry…"
@@ -761,11 +761,15 @@ Panel {
                 }
               }
               ActionButton {
+                id: timerSaveButton
                 cursorIndex: 3
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3
-                label: root.pendingIntent === "log" ? "Logging…" : "Log"
+                label: root.pendingIntent === "log" ? "" : "Save"
                 iconText: root.pendingIntent === "log" ? "󰑮" : ""
                 iconSpinning: root.pendingIntent === "log"
+                tooltipText: root.pendingIntent === "log" ? "Saving time entry" : "Save timer as time entry"
+                implicitWidth: timerToggleButton.implicitWidth
+                implicitHeight: timerToggleButton.implicitHeight
                 enabled: root.canMutate && root.timeTracking.activeTimer
                 onTriggered: root.timeTracking.logTimer()
               }
