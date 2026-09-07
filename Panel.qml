@@ -1124,8 +1124,8 @@ Panel {
                   return {
                     value: JSON.stringify([String(shortcut.projectId), shortcut.serviceId == null ? "" : String(shortcut.serviceId)]),
                     label: String(shortcut.project.clientName || "Internal") + " · "
-                      + String(shortcut.project.title || shortcut.project.name || "Project")
-                      + (shortcut.serviceName ? " · " + shortcut.serviceName : "")
+                      + String(shortcut.project.title || shortcut.project.name || "Project"),
+                    description: String(shortcut.serviceName || "No service")
                   }
                 })
                 // Keep an existing selection readable even when it is no longer offered.
@@ -1134,7 +1134,8 @@ Panel {
                 if (project && !choices.some(function(choice) { return choice.value === selected })) {
                   var service = root.serviceName(project, root.entryServiceId)
                   choices.unshift({ value: selected, label: String(project.clientName || "Internal")
-                    + " · " + String(project.title || project.name || "Project") + (service ? " · " + service : "") })
+                    + " · " + String(project.title || project.name || "Project"),
+                    description: service || "No service" })
                 }
                 return choices
               }
@@ -1149,6 +1150,16 @@ Panel {
                 property: "value"
                 value: root.entryProjectId === "" ? "" : JSON.stringify([root.entryProjectId, root.entryServiceId])
               }
+            }
+            Text {
+              width: parent.width
+              visible: root.entryProjectId !== ""
+              textFormat: Text.PlainText
+              text: "Service: " + (root.serviceName(root.projectById(root.entryProjectId), root.entryServiceId) || "No service")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
             }
             Text {
               width: parent.width
