@@ -46,8 +46,6 @@ Panel {
     || setupDiagnostics.authenticated !== true
     || setupDiagnostics.businessSelected !== true
   property string entryEditorMode: "closed"
-  property string entryProjectSearch: ""
-  readonly property var entryProjectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), entryProjectSearch)
   property string editingEntryId: ""
   property string entryProjectId: ""
   property string entryServiceId: ""
@@ -740,7 +738,7 @@ Panel {
                   id: timerToggleGlyph
                   anchors.centerIn: parent
                   textFormat: Text.PlainText
-                  text: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰑮"
+                  text: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰦖"
                     : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊")
                   color: timerToggleButton.hot ? root.hoverContentColor : root.selectedContentColor
                   font.family: root.fontFamily
@@ -760,7 +758,7 @@ Panel {
                 cursorIndex: 3
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3
                 label: root.pendingIntent === "log" ? "" : "Save"
-                iconText: root.pendingIntent === "log" ? "󰑮" : ""
+                iconText: root.pendingIntent === "log" ? "󰦖" : ""
                 iconSpinning: root.pendingIntent === "log"
                 tooltipText: root.pendingIntent === "log" ? "Saving time entry" : "Save timer as time entry"
                 implicitWidth: timerToggleButton.implicitWidth
@@ -891,7 +889,7 @@ Panel {
                       anchors.right: parent.right
                       anchors.rightMargin: Style.space(6)
                       anchors.verticalCenter: parent.verticalCenter
-                      iconText: pending ? "󰑮"
+                      iconText: pending ? "󰦖"
                         : (root.timeTracking && root.timeTracking.activeTimer
                           && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
                           && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
@@ -1084,10 +1082,10 @@ Panel {
         closePolicy: Popup.NoAutoClose
         visible: root.opened && !root.setupRequired && root.tab === "calendar" && root.entryEditorMode !== "closed"
         onOpened: {
-          entryProjectSearchField.clear()
           entryEditorViewport.contentY = 0
-          entryProjectSearchField.forceActiveFocus()
+          entryNoteField.forceActiveFocus()
         }
+        onClosed: entryProjectPicker.close()
         Overlay.modal: Rectangle { color: "#99000000" }
         background: Rectangle {
           color: Color.popups.background
@@ -1112,80 +1110,45 @@ Panel {
             TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
             TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
             PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
-            TextField {
-              id: entryProjectSearchField
+            SearchableDropdown {
+              id: entryProjectPicker
               width: parent.width
+              showLabel: false
               placeholderText: "Search projects, clients, or services"
-              onTextChanged: { root.entryProjectSearch = text; entryProjectViewport.contentY = 0 }
-            }
-            Text {
-              width: parent.width
-              visible: root.entryProjectShortcuts.length === 0
-              text: root.entryProjectSearch.trim() ? "No matching projects or services" : "No projects available"
-              color: root.foreground
-              font.family: root.fontFamily
-              wrapMode: Text.Wrap
-            }
-            Flickable {
-              id: entryProjectViewport
-              width: parent.width
-              height: Style.space(120)
-              boundsBehavior: Flickable.StopAtBounds
-              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-              contentHeight: entryProjectColumn.implicitHeight
-              clip: true
-              Column {
-                id: entryProjectColumn
-                width: parent.width
-                spacing: Style.space(3)
-                Repeater {
-                  model: root.entryProjectShortcuts
-                  CursorSurface {
-                    id: entryProjectChoice
-                    required property var modelData
-                    property bool pointerHot: false
-                    readonly property color contentColor: hasCursor
-                      ? root.hoverContentColor
-                      : (current ? root.selectedContentColor : root.foreground)
-                    width: entryProjectColumn.width
-                    height: Style.space(30)
-                    activeFocusOnTab: true
-                    hasCursor: activeFocus || pointerHot
-                    current: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId)
-                    bordered: true
-                    foreground: root.foreground
-                    accent: Color.accent
-                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: entryProjectChoice.contentColor; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                    MouseArea {
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onContainsMouseChanged: entryProjectChoice.pointerHot = containsMouse
-                      onClicked: {
-                        root.entryProjectId = String(modelData.projectId)
-                        root.entryServiceId = String(modelData.serviceId)
-                        root.persistEntryDraft(true)
-                      }
-                    }
-                    Keys.onReturnPressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
-                    Keys.onSpacePressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
+              emptyText: "No matching projects or services"
+              triggerLabel: "Select a project"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              options: {
+                var choices = Model.projectShortcuts(root.orderedProjects).map(function(shortcut) {
+                  return {
+                    value: JSON.stringify([String(shortcut.projectId), shortcut.serviceId == null ? "" : String(shortcut.serviceId)]),
+                    label: String(shortcut.project.clientName || "Internal") + " · "
+                      + String(shortcut.project.title || shortcut.project.name || "Project")
+                      + (shortcut.serviceName ? " · " + shortcut.serviceName : "")
                   }
-                }
-              }
-            }
-            Text {
-              width: parent.width
-              text: {
+                })
+                // Keep an existing selection readable even when it is no longer offered.
+                var selected = JSON.stringify([root.entryProjectId, root.entryServiceId])
                 var project = root.projectById(root.entryProjectId)
-                if (!project) return "Select a project above"
-                var service = root.serviceName(project, root.entryServiceId)
-                return "Selected: " + String(project.clientName || "Internal") + " · "
-                  + String(project.title || project.name || "Project") + (service ? " · " + service : "")
+                if (project && !choices.some(function(choice) { return choice.value === selected })) {
+                  var service = root.serviceName(project, root.entryServiceId)
+                  choices.unshift({ value: selected, label: String(project.clientName || "Internal")
+                    + " · " + String(project.title || project.name || "Project") + (service ? " · " + service : "") })
+                }
+                return choices
               }
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.Wrap
+              onChanged: function(value) {
+                var selection = JSON.parse(value)
+                root.entryProjectId = selection[0]
+                root.entryServiceId = selection[1]
+                root.persistEntryDraft(true)
+              }
+              Binding {
+                target: entryProjectPicker
+                property: "value"
+                value: root.entryProjectId === "" ? "" : JSON.stringify([root.entryProjectId, root.entryServiceId])
+              }
             }
             Text {
               width: parent.width
@@ -1200,7 +1163,7 @@ Panel {
               spacing: Style.space(8)
               ActionButton {
                 label: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "Saving…" : "Save"
-                iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰑮" : ""
+                iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰦖" : ""
                 iconSpinning: root.entryActionPending && root.pendingIntent !== "deleteEntry"
                 enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
                 onTriggered: root.saveEntry()
@@ -1211,7 +1174,7 @@ Panel {
                 visible: root.entryEditorMode === "edit"
                 enabled: root.canMutate
                 label: root.pendingIntent === "deleteEntry" ? "Deleting…" : (root.confirmingDelete ? "Delete now" : "Delete")
-                iconText: root.pendingIntent === "deleteEntry" ? "󰑮" : ""
+                iconText: root.pendingIntent === "deleteEntry" ? "󰦖" : ""
                 iconSpinning: root.pendingIntent === "deleteEntry"
                 onTriggered: {
                   if (!root.confirmingDelete) root.confirmingDelete = true
