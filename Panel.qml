@@ -46,6 +46,8 @@ Panel {
     || setupDiagnostics.authenticated !== true
     || setupDiagnostics.businessSelected !== true
   property string entryEditorMode: "closed"
+  property string entryProjectSearch: ""
+  readonly property var entryProjectShortcuts: Model.searchShortcuts(Model.projectShortcuts(orderedProjects), entryProjectSearch)
   property string editingEntryId: ""
   property string entryProjectId: ""
   property string entryServiceId: ""
@@ -55,8 +57,7 @@ Panel {
   property bool confirmingDelete: false
   property string entrySnapshotToken: ""
   onEntryEditorModeChanged: {
-    if (entryEditorMode === "closed") Qt.callLater(function() { calendarViewport.contentY = 0 })
-    else revealEntryEditor()
+    if (entryEditorMode === "closed") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -223,14 +224,6 @@ Panel {
     entryEditorMode = "closed"
     editingEntryId = ""
     if (timeTracking) timeTracking.clearEntryDraft()
-  }
-
-  function revealEntryEditor() {
-    if (entryEditorMode === "closed") return
-    Qt.callLater(function() {
-      var maximum = Math.max(0, calendarViewport.contentHeight - calendarViewport.height)
-      calendarViewport.contentY = Math.min(Math.max(0, calendarEditor.y), maximum)
-    })
   }
 
   function moveMonth(delta) {
@@ -1041,7 +1034,6 @@ Panel {
               ActionButton { id: addEntryButton; cursorIndex: 0; hasCursor: root.cursorActive && root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; calendarListTarget: true; onTriggered: root.beginAddEntry() }
             }
             Column {
-              visible: root.entryEditorMode === "closed"
               width: parent.width
               id: entryColumn
               spacing: Style.space(4)
@@ -1074,99 +1066,173 @@ Panel {
                 }
               }
             }
-
-            Column {
-              id: calendarEditor
-              visible: root.entryEditorMode !== "closed"
-              width: parent.width
-              spacing: Style.space(7)
-              Keys.onEscapePressed: root.cancelEntryEditor()
-              Text { text: root.entryEditorMode === "create" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-              TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
-              TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
-              TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
-              PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
-              Flickable {
-                width: parent.width
-                height: Style.space(100)
-                contentHeight: entryProjectColumn.implicitHeight
-                clip: true
-                Column {
-                  id: entryProjectColumn
-                  width: parent.width
-                  spacing: Style.space(3)
-                  Repeater {
-                    model: Model.projectShortcuts(root.orderedProjects)
-                    CursorSurface {
-                      id: entryProjectChoice
-                      required property var modelData
-                      property bool pointerHot: false
-                      readonly property color contentColor: hasCursor
-                        ? root.hoverContentColor
-                        : (current ? root.selectedContentColor : root.foreground)
-                      width: entryProjectColumn.width
-                      height: Style.space(30)
-                      activeFocusOnTab: true
-                      hasCursor: activeFocus || pointerHot
-                      current: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId)
-                      bordered: true
-                      foreground: root.foreground
-                      accent: Color.accent
-                      Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: entryProjectChoice.contentColor; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-                      MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onContainsMouseChanged: entryProjectChoice.pointerHot = containsMouse
-                        onClicked: {
-                          root.entryProjectId = String(modelData.projectId)
-                          root.entryServiceId = String(modelData.serviceId)
-                          root.persistEntryDraft(true)
-                        }
-                      }
-                      Keys.onReturnPressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
-                      Keys.onSpacePressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
-                    }
-                  }
-                }
-              }
-              Row {
-                spacing: Style.space(8)
-                ActionButton {
-                  label: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "Saving…" : "Save"
-                  iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰑮" : ""
-                  iconSpinning: root.entryActionPending && root.pendingIntent !== "deleteEntry"
-                  enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
-                  onTriggered: root.saveEntry()
-                }
-                ActionButton { label: "Cancel"; onTriggered: root.cancelEntryEditor() }
-                ActionButton {
-                  id: deleteEntryButton
-                  visible: root.entryEditorMode === "edit"
-                  enabled: root.canMutate
-                  label: root.pendingIntent === "deleteEntry" ? "Deleting…" : (root.confirmingDelete ? "Delete now" : "Delete")
-                  iconText: root.pendingIntent === "deleteEntry" ? "󰑮" : ""
-                  iconSpinning: root.pendingIntent === "deleteEntry"
-                  onTriggered: {
-                    if (!root.confirmingDelete) root.confirmingDelete = true
-                    else {
-                      root.timeTracking.deleteEntry(root.editingEntryId, root.entrySnapshotToken)
-                      root.confirmingDelete = false
-                    }
-                  }
-                }
-              }
-              Row {
-                visible: root.timeTracking && root.timeTracking.conflictPending
-                spacing: Style.space(8)
-                ActionButton { label: "Reload remote entry"; onTriggered: root.timeTracking.resolveConflictReload() }
-                ActionButton { label: "Apply my entry"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
-              }
-            }
           }
           }
         }
       }
+      Popup {
+        id: entryDialog
+        parent: keyCatcher
+        x: Style.space(8)
+        y: Math.max(0, (parent.height - height) / 2)
+        width: Math.max(0, parent.width - Style.space(16))
+        height: Math.min(parent.height, calendarEditor.implicitHeight + padding * 2)
+        padding: Style.space(14)
+        modal: true
+        dim: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        visible: root.opened && !root.setupRequired && root.tab === "calendar" && root.entryEditorMode !== "closed"
+        onOpened: {
+          entryProjectSearchField.clear()
+          entryEditorViewport.contentY = 0
+          entryProjectSearchField.forceActiveFocus()
+        }
+        Overlay.modal: Rectangle { color: "#99000000" }
+        background: Rectangle {
+          color: Color.popups.background
+          radius: Style.space(10)
+          border.width: 1
+          border.color: root.foreground
+        }
+        contentItem: Flickable {
+          id: entryEditorViewport
+          contentHeight: calendarEditor.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          Keys.onEscapePressed: function(event) { root.cancelEntryEditor(); event.accepted = true }
+          Column {
+            id: calendarEditor
+            width: entryEditorViewport.width
+            spacing: Style.space(7)
+            Text { text: root.entryEditorMode === "create" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+            TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
+            TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
+            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
+            PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
+            TextField {
+              id: entryProjectSearchField
+              width: parent.width
+              placeholderText: "Search projects, clients, or services"
+              onTextChanged: { root.entryProjectSearch = text; entryProjectViewport.contentY = 0 }
+            }
+            Text {
+              width: parent.width
+              visible: root.entryProjectShortcuts.length === 0
+              text: root.entryProjectSearch.trim() ? "No matching projects or services" : "No projects available"
+              color: root.foreground
+              font.family: root.fontFamily
+              wrapMode: Text.Wrap
+            }
+            Flickable {
+              id: entryProjectViewport
+              width: parent.width
+              height: Style.space(120)
+              boundsBehavior: Flickable.StopAtBounds
+              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+              contentHeight: entryProjectColumn.implicitHeight
+              clip: true
+              Column {
+                id: entryProjectColumn
+                width: parent.width
+                spacing: Style.space(3)
+                Repeater {
+                  model: root.entryProjectShortcuts
+                  CursorSurface {
+                    id: entryProjectChoice
+                    required property var modelData
+                    property bool pointerHot: false
+                    readonly property color contentColor: hasCursor
+                      ? root.hoverContentColor
+                      : (current ? root.selectedContentColor : root.foreground)
+                    width: entryProjectColumn.width
+                    height: Style.space(30)
+                    activeFocusOnTab: true
+                    hasCursor: activeFocus || pointerHot
+                    current: String(root.entryProjectId) === String(modelData.projectId) && String(root.entryServiceId) === String(modelData.serviceId)
+                    bordered: true
+                    foreground: root.foreground
+                    accent: Color.accent
+                    Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; text: String(modelData.project.clientName || "Internal") + " · " + String(modelData.project.title || "Project") + (modelData.serviceName ? " · " + modelData.serviceName : ""); color: entryProjectChoice.contentColor; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onContainsMouseChanged: entryProjectChoice.pointerHot = containsMouse
+                      onClicked: {
+                        root.entryProjectId = String(modelData.projectId)
+                        root.entryServiceId = String(modelData.serviceId)
+                        root.persistEntryDraft(true)
+                      }
+                    }
+                    Keys.onReturnPressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
+                    Keys.onSpacePressed: { root.entryProjectId = String(modelData.projectId); root.entryServiceId = String(modelData.serviceId); root.persistEntryDraft(true) }
+                  }
+                }
+              }
+            }
+            Text {
+              width: parent.width
+              text: {
+                var project = root.projectById(root.entryProjectId)
+                if (!project) return "Select a project above"
+                var service = root.serviceName(project, root.entryServiceId)
+                return "Selected: " + String(project.clientName || "Internal") + " · "
+                  + String(project.title || project.name || "Project") + (service ? " · " + service : "")
+              }
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+            Text {
+              width: parent.width
+              visible: text !== ""
+              text: root.timeTracking ? String(root.timeTracking.lastError || "") : ""
+              color: Color.urgent
+              font.family: root.fontFamily
+              wrapMode: Text.Wrap
+            }
+            Flow {
+              width: parent.width
+              spacing: Style.space(8)
+              ActionButton {
+                label: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "Saving…" : "Save"
+                iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰑮" : ""
+                iconSpinning: root.entryActionPending && root.pendingIntent !== "deleteEntry"
+                enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
+                onTriggered: root.saveEntry()
+              }
+              ActionButton { label: "Cancel"; onTriggered: root.cancelEntryEditor() }
+              ActionButton {
+                id: deleteEntryButton
+                visible: root.entryEditorMode === "edit"
+                enabled: root.canMutate
+                label: root.pendingIntent === "deleteEntry" ? "Deleting…" : (root.confirmingDelete ? "Delete now" : "Delete")
+                iconText: root.pendingIntent === "deleteEntry" ? "󰑮" : ""
+                iconSpinning: root.pendingIntent === "deleteEntry"
+                onTriggered: {
+                  if (!root.confirmingDelete) root.confirmingDelete = true
+                  else {
+                    root.timeTracking.deleteEntry(root.editingEntryId, root.entrySnapshotToken)
+                    root.confirmingDelete = false
+                  }
+                }
+              }
+            }
+            Flow {
+              width: parent.width
+              visible: root.timeTracking && root.timeTracking.conflictPending
+              spacing: Style.space(8)
+              ActionButton { label: "Reload remote entry"; onTriggered: root.timeTracking.resolveConflictReload() }
+              ActionButton { label: "Apply my entry"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
+            }
+          }
+        }
+      }
+
     }
   }
 
