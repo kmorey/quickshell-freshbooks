@@ -334,9 +334,20 @@ Panel {
     else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
   }
 
+  function entryMatchesTimer(entry) {
+    var timer = timeTracking ? timeTracking.activeTimer : null
+    return !!(entry && timer
+      && String(entry.projectId) === String(timer.projectId)
+      && String(entry.serviceId || "") === String(timer.serviceId || "")
+      && String(entry.note || "") === String(timer.note || ""))
+  }
+
   function resumeEntry(entry) {
     if (!canMutate || !entry) return
-    if (timeTracking.activeTimer) timeTracking.switchTimer(entry.projectId, entry.serviceId, entry.note)
+    if (entryMatchesTimer(entry)) {
+      if (timeTracking.activeTimer.running) timeTracking.pause()
+      else timeTracking.resume()
+    } else if (timeTracking.activeTimer) timeTracking.switchTimer(entry.projectId, entry.serviceId, entry.note)
     else timeTracking.start(entry.projectId, entry.serviceId, entry.note)
   }
 
@@ -1052,12 +1063,46 @@ Panel {
                   required property var modelData
                   required property int index
                   readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
+                  readonly property var project: root.projectById(modelData.projectId)
+                  readonly property bool running: root.entryMatchesTimer(modelData) && root.timeTracking.activeTimer.running
                   width: entryColumn.width
-                  height: Math.max(Style.space(38), resumeEntryButton.height)
+                  height: Math.max(entryDetails.implicitHeight + Style.space(16), resumeEntryButton.height)
                   hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index * 2 + 1
                   foreground: root.foreground
                   accent: Color.accent
-                  Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: Math.max(0, entryDuration.x - x - Style.space(10)); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
+                  Column {
+                    id: entryDetails
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(0, entryDuration.x - x - Style.space(10))
+                    spacing: Style.space(3)
+                    Text {
+                      width: parent.width
+                      text: String(entryRow.project ? entryRow.project.name : (entryRow.modelData.projectName || "Project " + entryRow.modelData.projectId))
+                      color: entryRow.contentColor
+                      font.family: root.fontFamily
+                      font.bold: true
+                      wrapMode: Text.Wrap
+                    }
+                    Text {
+                      width: parent.width
+                      text: root.serviceName(entryRow.project, entryRow.modelData.serviceId) || entryRow.modelData.serviceName || (entryRow.modelData.serviceId ? "Service " + entryRow.modelData.serviceId : "No service")
+                      color: entryRow.contentColor
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      wrapMode: Text.Wrap
+                    }
+                    Text {
+                      width: parent.width
+                      text: String(entryRow.modelData.note || "No notes")
+                      color: entryRow.contentColor
+                      opacity: 0.7
+                      elide: Text.ElideRight
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                  }
                   Text { id: entryDuration; anchors.right: resumeEntryButton.left; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
                   MouseArea {
                     anchors.left: parent.left
@@ -1077,7 +1122,11 @@ Panel {
                     id: resumeEntryButton
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    label: "Resume timer"
+                    label: ""
+                    iconText: entryRow.running ? "󰓛" : "󰐊"
+                    tooltipText: entryRow.running ? "Stop timer" : "Resume timer"
+                    implicitWidth: Style.space(38)
+                    implicitHeight: Style.space(38)
                     enabled: root.canMutate
                     cursorIndex: entryRow.index * 2 + 2
                     calendarListTarget: true
