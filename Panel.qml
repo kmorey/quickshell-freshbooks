@@ -1079,7 +1079,7 @@ Panel {
                     spacing: Style.space(3)
                     Text {
                       width: parent.width
-                      text: String(entryRow.project ? entryRow.project.name : (entryRow.modelData.projectName || "Project " + entryRow.modelData.projectId))
+                      text: String(entryRow.project && entryRow.project.title || entryRow.modelData.projectName || "Project " + entryRow.modelData.projectId)
                       color: entryRow.contentColor
                       font.family: root.fontFamily
                       font.bold: true

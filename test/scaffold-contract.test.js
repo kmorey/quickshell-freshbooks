@@ -5,6 +5,14 @@ const path = require('node:path')
 
 const root = path.resolve(__dirname, '..')
 
+test('calendar displays the project title from the CLI project record', () => {
+  const panel = fs.readFileSync(path.join(root, 'Panel.qml'), 'utf8')
+  const expression = panel.match(/^\s*text: (String\(entryRow\.project[^\n]+)$/m)[1]
+  const label = new Function('entryRow', `return ${expression}`)
+  assert.equal(label({ project: { id: 4, title: 'Website' }, modelData: { projectId: 4 } }), 'Website')
+  assert.equal(label({ project: null, modelData: { projectId: 4 } }), 'Project 4')
+})
+
 test('declares one installable service plus bar-widget plugin', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'))
   assert.equal(manifest.schemaVersion, 1)
