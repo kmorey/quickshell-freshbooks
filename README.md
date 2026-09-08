@@ -6,7 +6,7 @@ The popup provides:
 
 - a live Timer tab with notes, explicit duration correction, pause/resume, and log
 - a Projects tab ordered by the active and most recently used project/service combinations, with one-click safe switching
-- a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists
+- a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists, with **Resume timer** to start fresh time using an entry’s project, service, and notes
 - guided OAuth and business selection when FreshBooks has not been configured yet
 
 Timer and entry drafts are compared against FreshBooks snapshot tokens. If the browser or another client changes a dirty record, the panel offers **Reload** or **Apply mine** instead of silently overwriting it. Timed-out mutations are reconciled with a refresh before retry is enabled.

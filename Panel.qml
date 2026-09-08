@@ -178,7 +178,7 @@ Panel {
       return
     }
     if (dx !== 0) { switchTab(dx); return }
-    var count = tab === "timer" ? 5 : (tab === "projects" ? projectShortcuts.length : Math.max(1, dayEntries.length + 1))
+    var count = tab === "timer" ? 5 : (tab === "projects" ? projectShortcuts.length : dayEntries.length * 2 + 1)
     keyboardCursor = Math.max(0, Math.min(count - 1, keyboardCursor + dy))
     if (tab === "calendar" && keyboardCursor === 0 && dy < 0) calendarGridFocused = true
   }
@@ -203,14 +203,18 @@ Panel {
         calendarGridFocused = false
         keyboardCursor = 0
       } else if (keyboardCursor === 0) beginAddEntry()
-      else if (dayEntries.length) beginEditEntry(dayEntries[Math.min(keyboardCursor - 1, dayEntries.length - 1)])
+      else if (dayEntries.length) {
+        var entry = dayEntries[Math.min(Math.floor((keyboardCursor - 1) / 2), dayEntries.length - 1)]
+        if (keyboardCursor % 2 === 0) resumeEntry(entry)
+        else beginEditEntry(entry)
+      }
     }
   }
 
   function deleteKeyboardSelection() {
     if (tab !== "calendar") return
     if (entryEditorMode === "closed" && !calendarGridFocused && keyboardCursor > 0 && dayEntries.length) {
-      beginEditEntry(dayEntries[Math.min(keyboardCursor - 1, dayEntries.length - 1)])
+      beginEditEntry(dayEntries[Math.min(Math.floor((keyboardCursor - 1) / 2), dayEntries.length - 1)])
     }
     if (entryEditorMode !== "edit") return
     confirmingDelete = true
@@ -328,6 +332,12 @@ Panel {
       else timeTracking.resume()
     } else if (active) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
     else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
+  }
+
+  function resumeEntry(entry) {
+    if (!canMutate || !entry) return
+    if (timeTracking.activeTimer) timeTracking.switchTimer(entry.projectId, entry.serviceId, entry.note)
+    else timeTracking.start(entry.projectId, entry.serviceId, entry.note)
   }
 
   function projectById(projectId) {
@@ -1043,23 +1053,36 @@ Panel {
                   required property int index
                   readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
                   width: entryColumn.width
-                  height: Style.space(38)
-                  hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index + 1
+                  height: Math.max(Style.space(38), resumeEntryButton.height)
+                  hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index * 2 + 1
                   foreground: root.foreground
                   accent: Color.accent
-                  Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: parent.width - Style.space(110); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
-                  Text { anchors.right: parent.right; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
+                  Text { anchors.left: parent.left; anchors.leftMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; width: Math.max(0, entryDuration.x - x - Style.space(10)); text: String(modelData.note || "No notes"); color: entryRow.contentColor; elide: Text.ElideRight; font.family: root.fontFamily }
+                  Text { id: entryDuration; anchors.right: resumeEntryButton.left; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
                   MouseArea {
-                    anchors.fill: parent
+                    anchors.left: parent.left
+                    anchors.right: resumeEntryButton.left
+                    height: parent.height
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onContainsMouseChanged: {
                       if (!containsMouse) return
                       root.cursorActive = true
-                      root.keyboardCursor = index + 1
+                      root.keyboardCursor = index * 2 + 1
                       root.calendarGridFocused = false
                     }
                     onClicked: root.beginEditEntry(modelData)
+                  }
+                  ActionButton {
+                    id: resumeEntryButton
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "Resume timer"
+                    enabled: root.canMutate
+                    cursorIndex: entryRow.index * 2 + 2
+                    calendarListTarget: true
+                    hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === cursorIndex
+                    onTriggered: root.resumeEntry(entryRow.modelData)
                   }
                 }
               }

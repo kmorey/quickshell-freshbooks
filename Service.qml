@@ -356,13 +356,14 @@ Item {
       applyOptimisticTimer("log", payload)
   }
 
-  function switchTimer(projectId, serviceId) {
+  function switchTimer(projectId, serviceId, note) {
     if (timerMode === "multiple" || (timerMode === "single" && !activeTimer)) return
     var argv = ["timer", "switch", "--project", String(projectId)]
     if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
+    if (String(note || "") !== "") argv.push("--note", String(note))
     if (activeTimer) argv.push("--id", String(activeTimer.id))
     argv = withSnapshot(argv, activeTimer)
-    var payload = { timerId: activeTimer ? activeTimer.id : "", projectId: projectId, serviceId: serviceId, note: "" }
+    var payload = { timerId: activeTimer ? activeTimer.id : "", projectId: projectId, serviceId: serviceId, note: String(note || "") }
     if (enqueue("switch", argv, payload, true)) applyOptimisticTimer("switch", payload)
   }
 
