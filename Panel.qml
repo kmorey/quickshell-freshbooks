@@ -432,6 +432,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: root.opened
+        onActivated: root.close()
+      }
       blocked: clientIdField.activeFocus || clientSecretField.activeFocus || redirectUriField.activeFocus
         || authorizationCodeField.activeFocus || noteField.activeFocus || durationField.activeFocus
         || searchField.activeFocus || root.entryEditorMode !== "closed"
@@ -1172,7 +1178,7 @@ Panel {
           boundsBehavior: Flickable.StopAtBounds
           interactive: contentHeight > height
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-          Keys.onEscapePressed: function(event) { root.cancelEntryEditor(); event.accepted = true }
+          Keys.onEscapePressed: function(event) { root.close(); event.accepted = true }
           Column {
             id: calendarEditor
             width: entryEditorViewport.width
