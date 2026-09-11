@@ -13,6 +13,8 @@ Timer and entry drafts are compared against FreshBooks snapshot tokens. If the b
 
 FreshBooks remains authoritative. The plugin refreshes when opened, after mutations, and every 15 seconds while visible. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
 
+Duration inputs accept `MM:SS` or `HH:MM:SS`, including overflowing components: `60:00` and `00:60:00` both normalize to `01:00:00`. The active timer keeps counting while its duration field has focus, but ticks and refreshes leave the text and selection alone. Enter or focus loss commits a valid correction; an unfocused, clean field resumes live updates. Existing two-part drafts are migrated to explicit hours, minutes, and seconds to preserve their original meaning.
+
 ## Requirements
 
 - Omarchy 4 with the root-manifest shell plugin system

@@ -93,6 +93,7 @@ Panel {
   SystemClock {
     id: panelClock
     precision: SystemClock.Seconds
+    onDateChanged: if (root.opened) root.syncTimerDuration()
   }
 
   function localDateKey(date) {
@@ -246,19 +247,25 @@ Panel {
     return ""
   }
 
+  function syncTimerDuration() {
+    if (!timeTracking || durationField.activeFocus) return
+    var timer = timeTracking.activeTimer
+    var matchingDraft = timer && String(timeTracking.draftTimerId || "") === String(timer.id)
+    durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty
+      ? timeTracking.draftTimerDuration
+      : (timer ? Model.formatDuration(Model.logicalTimerElapsedSeconds(timer, panelClock.date.getTime())) : "")
+  }
+
   function hydrateDrafts() {
     if (!timeTracking) return
     var timer = timeTracking.activeTimer
     if (timer) {
       var matchingDraft = String(timeTracking.draftTimerId || "") === String(timer.id)
       noteField.text = matchingDraft && timeTracking.draftTimerNoteDirty ? timeTracking.draftTimerNote : String(timer.note || "")
-      durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty
-        ? timeTracking.draftTimerDuration
-        : Model.formatDuration(Model.logicalTimerElapsedSeconds(timer, panelClock.date.getTime()))
     } else {
       noteField.text = ""
-      durationField.text = ""
     }
+    syncTimerDuration()
     var draft = timeTracking.entryDraft || {}
     if (String(draft.mode || "") !== "") {
       if (String(draft.selectedDate || "") !== "") {
@@ -725,12 +732,17 @@ Panel {
               id: durationField
               width: parent.width
               enabled: root.timeTracking && root.timeTracking.activeTimer
-              placeholderText: "HH:MM or HH:MM:SS"
+              placeholderText: "MM:SS or HH:MM:SS"
               onTextEdited: root.persistTimerDurationDraft()
+              onActiveFocusChanged: if (!activeFocus) root.syncTimerDuration()
               onEditingFinished: {
+                if (!root.timeTracking || !root.timeTracking.activeTimer) return
                 var seconds = Model.parseDurationInput(text)
-                if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.mutationPending) root.timeTracking.correctDuration(seconds)
-                else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
+                if (seconds !== null && root.timeTracking.draftTimerDurationDirty) {
+                  text = Model.formatDuration(seconds)
+                  root.persistTimerDurationDraft()
+                  if (root.canMutate) root.timeTracking.correctDuration(seconds)
+                } else if (!root.timeTracking.draftTimerDurationDirty) root.syncTimerDuration()
               }
             }
             Text {
@@ -1186,7 +1198,7 @@ Panel {
             Text { text: root.entryEditorMode === "create" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
             TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
             TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
-            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
+            TextField { id: entryDurationField; width: parent.width; placeholderText: "MM:SS or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
             PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
             SearchableDropdown {
               id: entryProjectPicker

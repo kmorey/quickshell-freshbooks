@@ -323,13 +323,12 @@ function formatHoursMinutes(seconds) {
 }
 
 function parseDurationInput(value) {
-  var match = /^(\d+):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim())
+  var match = /^(\d+):(\d+)(?::(\d+))?$/.exec(String(value || "").trim())
   if (!match) return null
-  var hours = Number(match[1])
-  var minutes = Number(match[2])
-  var seconds = Number(match[3] || 0)
-  if (minutes > 59 || seconds > 59) return null
-  return hours * 3600 + minutes * 60 + seconds
+  var seconds = match[3] === undefined
+    ? Number(match[1]) * 60 + Number(match[2])
+    : Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
+  return isFinite(seconds) && seconds <= 9007199254740991 ? seconds : null
 }
 
 function entriesForDay(entries, key) {

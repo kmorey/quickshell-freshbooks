@@ -855,10 +855,12 @@ Item {
       } catch (error) {
         parsedSuccessfully = false
       }
-      if (!parsedSuccessfully || !parsedDraft || typeof parsedDraft !== "object" || Array.isArray(parsedDraft) || parsedDraft.schemaVersion !== 2) {
+      if (!parsedSuccessfully || !parsedDraft || typeof parsedDraft !== "object" || Array.isArray(parsedDraft) || (parsedDraft.schemaVersion !== 2 && parsedDraft.schemaVersion !== 3)) {
         root.preserveAndResetDraft(rawDraft)
       } else {
+        if (parsedDraft.schemaVersion === 2) root.migrateDurationDrafts()
         root._draftFileReady = true
+        if (parsedDraft.schemaVersion === 2) writeAdapter()
       }
     }
     onLoadFailed: {
@@ -872,7 +874,7 @@ Item {
 
     JsonAdapter {
       id: stateData
-      property int schemaVersion: 2
+      property int schemaVersion: 3
       property string timerId: ""
       property string timerNote: ""
       property string timerDuration: ""
@@ -881,6 +883,22 @@ Item {
       property bool timerDurationDirty: false
       property var entryDraft: ({})
     }
+  }
+
+  function migrateDurationDrafts() {
+    function explicitHours(value) {
+      var text = String(value || "")
+      var legacy = /^(\d+):([0-5]\d)$/.exec(text.trim())
+      return legacy ? legacy[1] + ":" + legacy[2] + ":00" : text
+    }
+    stateData.timerDuration = explicitHours(stateData.timerDuration)
+    if (stateData.entryDraft.duration !== undefined) {
+      var draft = {}
+      for (var key in stateData.entryDraft) draft[key] = stateData.entryDraft[key]
+      draft.duration = explicitHours(draft.duration)
+      stateData.entryDraft = draft
+    }
+    stateData.schemaVersion = 3
   }
 
   function preserveAndResetDraft(rawDraft) {
@@ -893,8 +911,8 @@ Item {
   function finishDraftReset() {
     if (!_draftResetPending) return
     _draftResetPending = false
-    if (stateData.schemaVersion !== 2) {
-      stateData.schemaVersion = 2
+    if (stateData.schemaVersion !== 3) {
+      stateData.schemaVersion = 3
     }
     clearTimerDraft()
     clearEntryDraft()

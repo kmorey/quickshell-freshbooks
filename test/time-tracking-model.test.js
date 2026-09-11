@@ -170,11 +170,18 @@ test('projects timer mutations immediately while FreshBooks is pending', () => {
   assert.equal(model.optimisticTimer(running, 'switch', { projectId: 11, serviceId: 12 }, nowMs).projectId, 11)
 })
 
-test('parses explicit HH:MM and HH:MM:SS duration input', () => {
-  assert.equal(model.parseDurationInput('10:00'), 36000)
+test('parses minutes and seconds, with optional leading hours and overflowing components', () => {
+  assert.equal(model.parseDurationInput('10:00'), 600)
   assert.equal(model.parseDurationInput('00:01:30'), 90)
-  assert.equal(model.parseDurationInput('1:60'), null)
-  assert.equal(model.parseDurationInput('90'), null)
+  assert.equal(model.formatDuration(model.parseDurationInput('60:00')), '01:00:00')
+  assert.equal(model.formatDuration(model.parseDurationInput('00:60:00')), '01:00:00')
+  assert.equal(model.formatDuration(model.parseDurationInput('1:120:90')), '03:01:30')
+})
+
+test('rejects incomplete, negative and unsafe duration input', () => {
+  for (const input of ['90', '1:', ':30', '1:2:3:4', '-1:30', '1.5:00', '9007199254740991:00']) {
+    assert.equal(model.parseDurationInput(input), null, input)
+  }
 })
 
 test('chooses a readable theme role for opaque selected surfaces', () => {

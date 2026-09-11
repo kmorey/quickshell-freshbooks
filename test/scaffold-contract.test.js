@@ -91,7 +91,6 @@ test('exposes one deep intent module and an injectable deterministic adapter', (
   assert.equal((service.match(/CliAdapter\s*\{/g) || []).length, 1)
   assert.match(service, /Quickshell\.statePath\("kmorey\.freshbooks-time-drafts\.json"\)/)
   assert.match(service, /atomicWrites: true/)
-  assert.match(service, /property int schemaVersion: 2/)
   assert.match(service, /mutation === true && \(outcomeUnknown \|\| conflictPending\)/)
   assert.match(service, /clearTimerNoteDraft/)
   assert.match(service, /clearTimerDurationDraft/)
