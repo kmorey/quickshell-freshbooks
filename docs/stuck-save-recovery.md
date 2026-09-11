@@ -2,9 +2,13 @@
 
 ## Status
 
-A scoped watchdog fix is committed with this handoff. It addresses a demonstrated failure path: after the adapter's existing 15-second request timeout asks a child CLI process to terminate, a child that remains alive can keep the interactive request busy indefinitely. This is not a proven diagnosis of the live incident on `blitz`.
+The live incident on `blitz` was recovered on 2026-09-11. The installed plugin was fast-forwarded to `c31d14a`, then activated with the supported `omarchy restart shell` command. The plugin declares `keepLoaded: true`, so a plugin rescan alone did not replace its stuck service.
 
-The remote save is still unresolved. No FreshBooks read, save retry, process signal, draft read/write, reload, or deployment was performed on `blitz`.
+Before activation, the persisted draft and visible note/duration were preserved outside Quickshell in a private, user-owned recovery directory. Authoritative FreshBooks reads showed the intended timer still running and no matching logged entry. Recovery paused that timer, restored the preserved duration, and finalized it once. Subsequent reads verified exactly one matching saved entry and that the recovered timer was no longer active. FreshBooks rounded the preserved seconds to a minute boundary; an explicit duration update returned the same rounded value.
+
+The panel's stale-draft conflict was acknowledged with **Reload**, not **Apply mine**. Final IPC state showed `busy: false`, an empty `pendingIntent`, and an empty `lastErrorCode`; the timer panel was visually checked without the pending message or conflict. A separate new timer appeared afterward and was left untouched.
+
+The observed live failure differed from the watchdog reproduction: the shell log recorded a failed launch of `freshbooks timer status --json`, with a queued pause and no surviving CLI child. No child was signalled. The pushed watchdog patch does not address that failed-launch path; the supported shell restart released the retained service state.
 
 ## Patch
 
@@ -21,7 +25,7 @@ A throwaway extraction harness exercised the real signal behavior with a Node ch
 - Normal completion stopped both timers.
 - A later request was not affected by a prior grace timer.
 
-The actual service timeout handler was also exercised: it moved the timed `log` request into unknown-outcome reconciliation, discarded queued mutations, and ignored a stale completion. There is no QML runtime in the current environment, so the actual Quickshell process lifecycle has not been run here.
+The actual service timeout handler was also exercised: it moved the timed `log` request into unknown-outcome reconciliation, discarded queued mutations, and ignored a stale completion. The original patch-verification environment had no QML runtime, so that harness did not exercise the actual Quickshell process lifecycle. The later live recovery above verified activation and the resolved UI, not the forced-termination watchdog path.
 
 ## Safe recovery on blitz
 
@@ -35,7 +39,7 @@ Before pulling or activating anything, preserve the visible pending note and dur
    - Completion: there is direct evidence that the intended entry exists or does not exist; no retry has occurred merely because the UI remained pending.
 4. If the child is verified stuck and recovery requires ending it, use the least disruptive termination that actually works. Reinspect afterward; do not terminate an unverified process.
    - Completion: the identified child has exited or a clearly recorded blocker remains.
-5. Pull this branch and activate the patch only through the shell/plugin mechanism discovered in step 1. Do not guess a reload command.
+5. Pull this branch and activate the patch only through the shell/plugin mechanism discovered in step 1. The `keepLoaded` service on the recovered installation required the supported shell restart; a plugin rescan retained the old service. Preserve drafts and reconcile first, and do not guess a reload command.
    - Completion: the running plugin is confirmed to use the pulled commit.
 6. Confirm the pending state clears and reconcile FreshBooks again. If step 3 showed no entry, resubmit once from the preserved draft, then verify exactly one matching FreshBooks entry. If it showed an existing entry, do not resubmit.
    - Completion: Quickshell has no stuck pending save, and FreshBooks has no lost or duplicate entry.
