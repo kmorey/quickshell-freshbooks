@@ -6,6 +6,7 @@ Item {
 
   property string executable: "freshbooks"
   property int timeoutMs: 15000
+  property int terminationGraceMs: 1000
   property int maxResponseBytes: 1048576
   property string activeRequestId: ""
   property var activeRequest: null
@@ -32,6 +33,7 @@ Item {
     stderrText = ""
     timedOut = false
     responseTooLarge = false
+    terminationWatchdog.stop()
     cliProcess.command = [executable].concat(argv).concat(["--json"])
     cliProcess.running = true
     watchdog.restart()
@@ -42,6 +44,7 @@ Item {
     timedOut = true
     pendingStdin = ""
     cliProcess.running = false
+    terminationWatchdog.restart()
   }
 
   function cancelOversized() {
@@ -123,6 +126,7 @@ Item {
 
   function finish(exitCode, exitStatus) {
     watchdog.stop()
+    terminationWatchdog.stop()
     var requestId = activeRequestId
     var request = activeRequest
     var stdoutDocument = parseDocument(stdoutCollector.text || stdoutText)
@@ -192,6 +196,15 @@ Item {
     interval: root.timeoutMs
     repeat: false
     onTriggered: root.cancel()
+  }
+
+  // Process.running = false sends SIGTERM. A CLI stalled in a signal handler
+  // must not indefinitely retain the interactive request in Service.qml.
+  Timer {
+    id: terminationWatchdog
+    interval: root.terminationGraceMs
+    repeat: false
+    onTriggered: if (cliProcess.running) cliProcess.signal(9)
   }
 
   Process {
