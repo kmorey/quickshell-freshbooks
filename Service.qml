@@ -73,8 +73,26 @@ Item {
   property bool _fullRefreshRequested: false
   property bool _optimisticTimerActive: false
   property var _optimisticTimer: null
+  property var _pendingCreatedEntryReconciliations: []
 
-  function saveEntryDraft(draft) { stateData.entryDraft = draft || ({}) }
+  function saveEntryDraft(draft) {
+    var next = draft || ({})
+    var current = entryDraft || {}
+    var currentMode = String(current.mode || "")
+    var nextMode = String(next.mode || "")
+    var currentId = String(current.entryId || (currentMode !== "edit" && currentMode !== "create" && currentMode !== "new" ? currentMode : ""))
+    var nextId = String(next.entryId || (nextMode !== "edit" && nextMode !== "create" && nextMode !== "new" ? nextMode : ""))
+    if (current.dirty === true && next.dirty === true && currentMode !== "create" && currentMode !== "new"
+        && nextMode !== "create" && nextMode !== "new" && currentId !== "" && currentId === nextId
+        && String(current.snapshotToken || "") !== ""
+        && String(next.snapshotToken || "") !== String(current.snapshotToken || "")) {
+      var preserved = {}
+      for (var key in next) preserved[key] = next[key]
+      preserved.snapshotToken = String(current.snapshotToken)
+      next = preserved
+    }
+    stateData.entryDraft = next
+  }
   function diagnosticsCompatible(value) {
     var data = value || {}
     var parts = String(data.version || "").split(".")
@@ -202,22 +220,43 @@ Item {
   function refreshEntries(fromDate, toDate) {
     lastEntryFrom = String(fromDate || lastEntryFrom || "")
     lastEntryTo = String(toDate || lastEntryTo || "")
+    var pendingCreations = _pendingCreatedEntryReconciliations.slice()
     if (_current && String(_current.intent || "") === "refreshEntries"
         && String((_current.payload || {}).fromDate || "") === lastEntryFrom
-        && String((_current.payload || {}).toDate || "") === lastEntryTo) return false
+        && String((_current.payload || {}).toDate || "") === lastEntryTo
+        && pendingCreations.length === 0) return false
     for (var i = 0; i < _queue.length; i++) {
       var queued = _queue[i]
       if (String(queued.intent || "") === "refreshEntries"
           && String((queued.payload || {}).fromDate || "") === lastEntryFrom
-          && String((queued.payload || {}).toDate || "") === lastEntryTo) return false
+          && String((queued.payload || {}).toDate || "") === lastEntryTo) {
+        if (pendingCreations.length > 0) {
+          queued.payload.createdEntryReconciliations = mergeCreatedEntryReconciliations(
+            queued.payload.createdEntryReconciliations, pendingCreations)
+          _pendingCreatedEntryReconciliations = []
+        }
+        return false
+      }
     }
     var retained = []
-    for (var j = 0; j < _queue.length; j++) if (String((_queue[j] || {}).intent || "") !== "refreshEntries") retained.push(_queue[j])
+    var carriedCreations = pendingCreations
+    for (var j = 0; j < _queue.length; j++) {
+      var candidate = _queue[j] || {}
+      if (String(candidate.intent || "") === "refreshEntries")
+        carriedCreations = mergeCreatedEntryReconciliations(
+          carriedCreations, (candidate.payload || {}).createdEntryReconciliations)
+      else retained.push(candidate)
+    }
     _queue = retained
+    _pendingCreatedEntryReconciliations = []
     var argv = ["time", "list"]
     if (lastEntryFrom !== "") argv.push("--from", lastEntryFrom)
     if (lastEntryTo !== "") argv.push("--to", lastEntryTo)
-    enqueue("refreshEntries", argv, { fromDate: lastEntryFrom, toDate: lastEntryTo }, false)
+    enqueue("refreshEntries", argv, {
+      fromDate: lastEntryFrom,
+      toDate: lastEntryTo,
+      createdEntryReconciliations: carriedCreations
+    }, false)
   }
 
   function refreshRecentEntries() {
@@ -386,6 +425,26 @@ Item {
     return argv
   }
 
+  function mergeCreatedEntryReconciliations(existing, added) {
+    var merged = []
+    var sources = [Array.isArray(existing) ? existing : [], Array.isArray(added) ? added : []]
+    for (var sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      for (var itemIndex = 0; itemIndex < sources[sourceIndex].length; itemIndex++) {
+        var item = sources[sourceIndex][itemIndex]
+        var itemId = String((item || {}).id || "")
+        var replaced = false
+        for (var mergedIndex = 0; mergedIndex < merged.length; mergedIndex++) {
+          if (String((merged[mergedIndex] || {}).id || "") !== itemId) continue
+          merged[mergedIndex] = item
+          replaced = true
+          break
+        }
+        if (!replaced && itemId !== "") merged.push(item)
+      }
+    }
+    return merged
+  }
+
   function createEntry(fields) {
     var payload = {}
     var values = fields || {}
@@ -398,8 +457,16 @@ Item {
   }
 
   function updateEntry(entryId, fields, snapshotToken) {
+    var guardToken = String(snapshotToken || "")
+    var draft = entryDraft || {}
+    var storedMode = String(draft.mode || "")
+    var draftEntryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
+    if ((storedMode === "edit" || (storedMode !== "create" && storedMode !== "new"))
+        && draftEntryId === String(entryId) && draft.dirty === true
+        && String(draft.snapshotToken || "") !== "")
+      guardToken = String(draft.snapshotToken)
     var argv = appendFieldArguments(["time", "update", String(entryId)], fields)
-    if (String(snapshotToken || "") !== "") argv.push("--snapshot", String(snapshotToken))
+    if (guardToken !== "") argv.push("--snapshot", guardToken)
     enqueue("updateEntry", argv, fields || {}, true)
   }
 
@@ -409,7 +476,7 @@ Item {
     enqueue("deleteEntry", argv, { entryId: entryId }, true)
   }
 
-  function enqueue(intent, argv, payload, mutation, stdin) {
+  function enqueue(intent, argv, payload, mutation, stdin, applyMine) {
     if (mutation === true && (outcomeUnknown || conflictPending)) return false
     _requestSerial += 1
     var next = _queue.slice()
@@ -421,6 +488,7 @@ Item {
       mutation: mutation === true,
       stdin: stdin === undefined ? undefined : String(stdin)
     }
+    if (applyMine === true) request.applyMine = true
     if (requestIsInteractive(request)) {
       var insertionIndex = 0
       while (insertionIndex < next.length && requestIsInteractive(next[insertionIndex])) insertionIndex += 1
@@ -475,15 +543,30 @@ Item {
     }
     if (!_conflictRequest) return
     var request = _conflictRequest
-    var argv = []
-    for (var i = 0; i < request.argv.length; i++) {
-      if (request.argv[i] === "--snapshot") { i += 1; continue }
-      argv.push(request.argv[i])
-    }
+    var argv = replaceTrailingSnapshotGuard(request.argv, "")
     conflictPending = false
     _conflictRequest = null
     clearError()
-    enqueue(request.intent, argv, request.payload, true)
+    enqueue(request.intent, argv, request.payload, true, undefined, true)
+  }
+
+  function replaceTrailingSnapshotGuard(argv, snapshotToken) {
+    var result = Array.isArray(argv) ? argv.slice() : []
+    if (result.length >= 2 && result[result.length - 2] === "--snapshot") result.splice(result.length - 2, 2)
+    var replacement = String(snapshotToken || "")
+    if (replacement !== "") result.push("--snapshot", replacement)
+    return result
+  }
+
+  function resolveEntryUpdateGuard(request) {
+    if (!request || String(request.intent || "") !== "updateEntry" || request.applyMine === true) return
+    var draft = entryDraft || {}
+    var storedMode = String(draft.mode || "")
+    var draftEntryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
+    if (draft.dirty !== true || storedMode === "create" || storedMode === "new"
+        || draftEntryId === "" || draftEntryId !== String((request.argv || [])[2] || "")
+        || String(draft.snapshotToken || "") === "") return
+    request.argv = replaceTrailingSnapshotGuard(request.argv, String(draft.snapshotToken))
   }
 
   function pump() {
@@ -491,6 +574,7 @@ Item {
     var next = _queue.slice()
     _current = next.shift()
     _queue = next
+    resolveEntryUpdateGuard(_current)
     phase = _current.mutation ? "mutating" : "refreshing"
     cliAdapter.execute(_current.id, _current)
     if (_current.stdin !== undefined) _current.stdin = ""
@@ -542,12 +626,34 @@ Item {
       next.push(timers[i])
     }
     if (replacement) next.push(replacement)
+    var retainedDraftForTimer = oldId !== "" && oldId === String(draftTimerId)
+    var retainedDirtyDraft = draftTimerNoteDirty || draftTimerDurationDirty
+    // A retained draft can only move to a non-empty snapshot produced by this
+    // confirmed plugin-owned mutation. Otherwise its prior baseline remains.
+    if (replacement && String(replacement.snapshotToken || "") !== ""
+        && retainedDraftForTimer && retainedDirtyDraft && replacementId === oldId)
+      stateData.timerSnapshotToken = String(replacement.snapshotToken)
+    // Logging removes the Active Timer, so no timer draft can remain useful.
+    else if (action === "log" && retainedDraftForTimer) clearTimerDraft()
     timers = next
     selectedTimerId = replacement ? replacementId : (timers.length === 1 ? String(timers[0].id) : "")
     snapshotStale = false
     lastRefreshMs = Date.now()
   }
 
+
+  function createdEntryMatches(record, provenance) {
+    if (!record || !provenance || String(record.id || "") !== String(provenance.id || "")) return false
+    var fields = ["projectId", "clientId", "serviceId", "durationSeconds", "note", "localDate", "startedAt"]
+    for (var i = 0; i < fields.length; i++) {
+      var key = fields[i]
+      if (provenance[key] === undefined) continue
+      if (key === "durationSeconds") {
+        if (Number(record[key]) !== Number(provenance[key])) return false
+      } else if (String(record[key] === null ? "" : record[key]) !== String(provenance[key] === null ? "" : provenance[key])) return false
+    }
+    return true
+  }
   function adoptEntryMutation(intent, data, request) {
     var action = String(intent || "")
     var payload = request && request.payload ? request.payload : {}
@@ -567,16 +673,47 @@ Item {
       startedAt: data.startedAt || new Date().toISOString()
     })
     recentEntries = recent
+    if (action === "createEntry" && data && typeof data === "object") {
+      var provenance = {}
+      var logicalFields = ["projectId", "clientId", "serviceId", "durationSeconds", "note", "localDate", "startedAt"]
+      for (var fieldIndex = 0; fieldIndex < logicalFields.length; fieldIndex++) {
+        var fieldName = logicalFields[fieldIndex]
+        if (payload[fieldName] !== undefined) provenance[fieldName] = payload[fieldName]
+        if (data[fieldName] !== undefined) provenance[fieldName] = data[fieldName]
+      }
+      provenance.id = data.id
+      _pendingCreatedEntryReconciliations = mergeCreatedEntryReconciliations(
+        _pendingCreatedEntryReconciliations, [provenance])
+    }
   }
 
-  function adoptEntryData(data) {
+  function adoptEntryData(data, creations) {
     var received = Array.isArray(data) ? data : []
+    var reconciliations = Array.isArray(creations) ? creations : []
     var draft = entryDraft || {}
     var storedMode = String(draft.mode || "")
     var mode = storedMode === "new" ? "create" : (storedMode === "create" || storedMode === "edit" ? storedMode : "edit")
     var entryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
-    if (mode === "edit" && entryId !== "" && draft.dirty === true
-        && Model.recordSnapshotChanged(received, entryId, draft.snapshotToken)) {
+    var snapshotChanged = mode === "edit" && entryId !== "" && draft.dirty === true
+      && Model.recordSnapshotChanged(received, entryId, draft.snapshotToken)
+    if (snapshotChanged) {
+      for (var creationIndex = 0; creationIndex < reconciliations.length; creationIndex++) {
+        var creation = reconciliations[creationIndex]
+        if (String((creation || {}).id || "") !== entryId) continue
+        for (var receivedIndex = 0; receivedIndex < received.length; receivedIndex++) {
+          var reconciledEntry = received[receivedIndex]
+          if (String(reconciledEntry.snapshotToken || "") === "" || !createdEntryMatches(reconciledEntry, creation)) continue
+          var rebasedDraft = {}
+          for (var draftKey in draft) rebasedDraft[draftKey] = draft[draftKey]
+          rebasedDraft.snapshotToken = String(reconciledEntry.snapshotToken || "")
+          stateData.entryDraft = rebasedDraft
+          snapshotChanged = false
+          break
+        }
+        break
+      }
+    }
+    if (snapshotChanged) {
       var fields = {
         durationSeconds: Model.parseDurationInput(String(draft.duration || "")),
         projectId: draft.projectId,
@@ -765,7 +902,7 @@ Item {
           && String(completed.payload.fromDate || "") === _unknownRefreshFrom
           && String(completed.payload.toDate || "") === _unknownRefreshTo
         if (isRecoveryRead) reconcileUnknownEntry(data)
-        adoptEntryData(data)
+        adoptEntryData(data, completed.payload.createdEntryReconciliations)
         if (isRecoveryRead && !conflictPending) {
           var restoreFrom = _unknownOriginalFrom
           var restoreTo = _unknownOriginalTo
