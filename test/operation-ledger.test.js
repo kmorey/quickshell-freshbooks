@@ -80,6 +80,73 @@ function matchingReceipt() {
   }
 }
 
+function deleted(kind = 'time-entry', id = '9') {
+  return { contractVersion: 2, kind, id, exists: false, token: null }
+}
+
+function activeTimer(overrides = {}) {
+  return {
+    contractVersion: 2,
+    kind: 'active-timer',
+    id: 'timer-1',
+    exists: true,
+    segments: [{
+      contractVersion: 2,
+      kind: 'timer-segment',
+      id: 'segment-1',
+      timerId: 'timer-1',
+      exists: true,
+      startedAt: '2026-09-02T17:00:00.000Z',
+      durationSeconds: null,
+      running: true,
+      logged: false,
+      token: '1'.repeat(64)
+    }],
+    state: 'running',
+    elapsedAnchor: {
+      closedSeconds: 0,
+      runningStartedAt: '2026-09-02T17:00:00.000Z',
+      observedAt: '2026-09-02T17:30:00.000Z'
+    },
+    projectId: '44',
+    clientId: '55',
+    serviceId: '66',
+    note: 'Planning',
+    billable: true,
+    token,
+    ...overrides
+  }
+}
+
+function inFlight(state = initial(), overrides = {}) {
+  let result = prepare(state, overrides)
+  result = persisted(result.state, result.state.operations.at(-1).operationId)
+  return Ledger.apply(result.state, {
+    type: 'request-started',
+    operationId: result.state.operations.at(-1).operationId,
+    requestId: result.state.operations.at(-1).request.requestId
+  })
+}
+
+function guardRejected(state, operationId, current) {
+  return Ledger.apply(state, {
+    type: 'completion',
+    operationId,
+    outcome: 'known-error',
+    error: {
+      code: 'GUARD_REJECTED',
+      message: 'FreshBooks changed',
+      details: {
+        contractVersion: 2,
+        identity: { kind: current.kind, id: current.id },
+        expectedToken: state.operations.find(operation => operation.operationId === operationId).baseToken,
+        currentToken: current.token,
+        current
+      }
+    }
+  })
+}
+
 test('save prepares durable draft and optimistic immutable view before request', () => {
   const result = prepare()
 
@@ -257,4 +324,360 @@ test('prepared in-flight and settled ledger snapshots round-trip through durable
   restored = Store.deserialize(Store.serialize(result.effects[0].snapshot))
   assert.equal(restored.recoveryError, null)
   assert.equal(restored.snapshot.operations[0].state, 'settled')
+})
+
+test('non-overlapping remote edit auto-merges and emits one newly guarded mutation', () => {
+  let result = inFlight(initial(), {
+    patch: { assignment: { projectId: '99', serviceId: '88' } },
+    draft: { projectId: '99', serviceId: '88' },
+    argv: ['time', 'update', '9', '--guard', token, '--project', '99', '--service', '88']
+  })
+  const current = entry('9', {
+    note: 'Changed remotely',
+    clientId: '77',
+    billable: false,
+    token: 'b'.repeat(64)
+  })
+
+  result = guardRejected(result.state, 'operation-1', current)
+
+  assert.deepEqual(Ledger.changedGroups(entry(), result.state.operations[0].intended), ['assignment'])
+  assert.equal(result.state.operations[0].state, 'superseded')
+  assert.equal(result.state.operations[1].state, 'prepared')
+  assert.equal(result.state.operations[1].lineage, 'operation-1')
+  assert.equal(result.state.operations[1].baseToken, current.token)
+  assert.equal(result.state.operations[1].intended.note, 'Changed remotely')
+  assert.equal(result.state.operations[1].intended.projectId, '99')
+  assert.equal(result.state.operations[1].intended.serviceId, '88')
+  assert.equal(result.state.operations[1].intended.clientId, '77')
+  assert.equal(result.state.operations[1].intended.billable, false)
+  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+  assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
+
+  result = persisted(result.state, 'operation-2')
+  assert.deepEqual(result.effects.map(effect => effect.type), ['request'])
+  assert.equal(result.effects[0].operationId, 'operation-2')
+  assert.equal(result.effects[0].argv.filter(value => value === '--guard').length, 1)
+  assert.equal(result.effects[0].argv[result.effects[0].argv.indexOf('--guard') + 1], current.token)
+})
+
+test('same-field same-value settles without a choice', () => {
+  let result = inFlight()
+  result = guardRejected(result.state, 'operation-1', entry('9', {
+    note: 'Changed locally',
+    token: 'b'.repeat(64)
+  }))
+  assert.equal(result.state.operations[0].state, 'in-flight')
+  assert.equal(result.effects[0].transactionId, 'resolution-operation-1')
+  assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
+  result = persisted(result.state, 'resolution-operation-1')
+
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.equal(result.state.operations.length, 1)
+  assert.equal(result.view.conflicts.length, 0)
+  assert.equal(result.view.records['time-entry:9'].note, 'Changed locally')
+  assert.equal(result.view.records['time-entry:9'].token, 'b'.repeat(64))
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+  const later = Ledger.apply(result.state, saveEvent({
+    scope: 'time-entry:10',
+    base: entry('10'),
+    patch: { note: 'Later edit' },
+    draft: { note: 'Later edit' },
+    argv: ['time', 'update', '10']
+  }))
+  assert.equal(Store.deserialize(Store.serialize(later.effects[0].snapshot)).recoveryError, null)
+})
+
+test('token mismatch with equal canonical semantics settles silently', () => {
+  let result = inFlight(initial(), {
+    patch: { note: 'Planning' },
+    draft: { note: 'Planning' }
+  })
+  result = guardRejected(result.state, 'operation-1', entry('9', { token: 'b'.repeat(64) }))
+  assert.equal(result.state.operations[0].state, 'in-flight')
+  result = persisted(result.state, 'resolution-operation-1')
+
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.deepEqual(result.view.conflicts, [])
+  assert.equal(result.view.records['time-entry:9'].token, 'b'.repeat(64))
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+})
+
+test('divergent same-field edits expose only that group', () => {
+  let result = inFlight()
+  const current = entry('9', {
+    note: 'Changed remotely',
+    durationSeconds: 7200,
+    token: 'b'.repeat(64)
+  })
+  result = guardRejected(result.state, 'operation-1', current)
+
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.deepEqual(result.view.conflicts[0].groups.map(choice => choice.group), ['note'])
+  assert.equal(result.view.conflicts[0].groups[0].mine, 'Changed locally')
+  assert.equal(result.view.conflicts[0].groups[0].freshbooks, 'Changed remotely')
+  assert.equal(result.view.records['time-entry:9'].durationSeconds, 7200)
+  assert.equal(result.view.conflicts[0].deletion, false)
+  assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
+})
+
+test('mine resolution guards latest current record', () => {
+  let result = inFlight()
+  const current = entry('9', { note: 'Changed remotely', token: 'b'.repeat(64) })
+  result = guardRejected(result.state, 'operation-1', current)
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'choose-mine', operationId: 'operation-1', group: 'note' }
+  })
+
+  assert.equal(result.state.operations[0].state, 'superseded')
+  assert.equal(result.state.operations[1].lineage, 'operation-1')
+  assert.equal(result.state.operations[1].baseToken, current.token)
+  assert.equal(result.state.operations[1].intended.note, 'Changed locally')
+  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+
+  result = persisted(result.state, 'operation-2')
+  const guardIndex = result.effects[0].argv.indexOf('--guard')
+  assert.equal(result.effects[0].argv[guardIndex + 1], current.token)
+})
+
+test('freshbooks resolution adopts only selected group', () => {
+  let result = inFlight(initial(), {
+    patch: { note: 'Mine note', duration: 4000 },
+    draft: { note: 'Mine note', durationSeconds: 4000 }
+  })
+  result = guardRejected(result.state, 'operation-1', entry('9', {
+    note: 'Remote note',
+    durationSeconds: 5000,
+    token: 'b'.repeat(64)
+  }))
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'choose-freshbooks', operationId: 'operation-1', group: 'note' }
+  })
+
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.deepEqual(result.view.conflicts[0].groups.map(choice => choice.group), ['duration'])
+  assert.equal(result.view.records['time-entry:9'].note, 'Remote note')
+  assert.equal(result.view.records['time-entry:9'].durationSeconds, 4000)
+  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'choose-mine', operationId: 'operation-1', group: 'duration' }
+  })
+  assert.equal(result.state.operations[1].intended.note, 'Remote note')
+  assert.equal(result.state.operations[1].intended.durationSeconds, 4000)
+  assert.equal(result.state.operations[1].baseToken, 'b'.repeat(64))
+
+  let reversed = inFlight(initial(), {
+    patch: { note: 'Mine note', duration: 4000 },
+    draft: { note: 'Mine note', durationSeconds: 4000 }
+  })
+  reversed = guardRejected(reversed.state, 'operation-1', entry('9', {
+    note: 'Remote note',
+    durationSeconds: 5000,
+    token: 'b'.repeat(64)
+  }))
+  reversed = Ledger.apply(reversed.state, {
+    type: 'intent',
+    intent: { type: 'choose-mine', operationId: 'operation-1', group: 'note' }
+  })
+  reversed = Ledger.apply(reversed.state, {
+    type: 'intent',
+    intent: { type: 'choose-freshbooks', operationId: 'operation-1', group: 'duration' }
+  })
+  assert.equal(reversed.state.operations[1].intended.note, 'Mine note')
+  assert.equal(reversed.state.operations[1].intended.durationSeconds, 5000)
+})
+
+test('second remote change re-runs merge instead of applying stale choice', () => {
+  let result = inFlight()
+  result = guardRejected(result.state, 'operation-1', entry('9', {
+    note: 'First remote note',
+    token: 'b'.repeat(64)
+  }))
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'choose-mine', operationId: 'operation-1', group: 'note' }
+  })
+  result = persisted(result.state, 'operation-2')
+  result = Ledger.apply(result.state, {
+    type: 'request-started',
+    operationId: 'operation-2',
+    requestId: 'request-2'
+  })
+  result = guardRejected(result.state, 'operation-2', entry('9', {
+    note: 'Second remote note',
+    token: 'c'.repeat(64)
+  }))
+
+  assert.equal(result.state.operations[1].state, 'conflicted')
+  assert.equal(result.state.operations.length, 2)
+  assert.equal(result.view.conflicts[0].groups[0].mine, 'Changed locally')
+  assert.equal(result.view.conflicts[0].groups[0].freshbooks, 'Second remote note')
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+})
+
+test('remote deletion with unchanged local accepts deletion', () => {
+  let result = inFlight(initial(), {
+    patch: { note: 'Planning' },
+    draft: { note: 'Planning' }
+  })
+  result = guardRejected(result.state, 'operation-1', deleted())
+  assert.equal(result.state.operations[0].state, 'in-flight')
+  assert.notEqual(result.view.records['time-entry:9'], undefined)
+  result = persisted(result.state, 'resolution-operation-1')
+
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.equal(result.view.records['time-entry:9'], undefined)
+  assert.deepEqual(result.view.conflicts, [])
+})
+
+test('remote deletion with local edit offers restore or discard', () => {
+  let result = inFlight()
+  result = guardRejected(result.state, 'operation-1', deleted())
+
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.equal(result.view.conflicts[0].deletion, true)
+  assert.deepEqual(result.view.conflicts[0].groups, [])
+  assert.equal(result.view.actions['time-entry:9'].canResolve, true)
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'discard-local', scope: 'time-entry:9' }
+  })
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.equal(result.effects[0].transactionId, 'resolution-operation-1')
+  result = persisted(result.state, 'resolution-operation-1')
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.equal(result.view.records['time-entry:9'], undefined)
+  assert.equal(result.view.actions['time-entry:9'].canMutate, true)
+})
+
+test('restore as new omits deleted identity and uses provisional scope', () => {
+  let result = inFlight()
+  result = guardRejected(result.state, 'operation-1', deleted())
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'restore-as-new', operationId: 'operation-1' }
+  })
+
+  const replacement = result.state.operations[1]
+  assert.equal(result.state.operations[0].state, 'superseded')
+  assert.equal(replacement.kind, 'save-entry')
+  assert.equal(replacement.scope, 'provisional:operation-2:time-entry-create')
+  assert.equal(replacement.base, null)
+  assert.equal(replacement.baseToken, null)
+  assert.equal(replacement.intended.id, 'provisional')
+  assert.equal(replacement.intended.note, 'Changed locally')
+  assert.equal(replacement.request.argv.includes('9'), false)
+  assert.equal(replacement.request.argv.includes('--guard'), false)
+  assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
+
+  const base = activeTimer()
+  let timerResult = inFlight(initial([base]), {
+    type: 'update-note',
+    scope: 'active-timer:timer-1',
+    base,
+    baseToken: token,
+    patch: { note: 'Changed locally' },
+    draft: { note: 'Changed locally' },
+    argv: ['timer', 'update', '--id', 'timer-1', '--guard', token, '--note', 'Changed locally']
+  })
+  timerResult = guardRejected(timerResult.state, 'operation-1', deleted('active-timer', 'timer-1'))
+  timerResult = Ledger.apply(timerResult.state, {
+    type: 'intent',
+    intent: { type: 'restore-as-new', scope: 'active-timer:timer-1' }
+  })
+  const restoredTimer = timerResult.state.operations[1]
+  assert.equal(restoredTimer.kind, 'start')
+  assert.equal(restoredTimer.scope, 'provisional:operation-2:active-timer-create')
+  assert.equal(restoredTimer.intended.id, 'provisional')
+  assert.equal(restoredTimer.intended.segments[0].timerId, 'provisional')
+  assert.equal(restoredTimer.request.argv.includes('timer-1'), false)
+  assert.equal(Store.deserialize(Store.serialize(timerResult.effects[0].snapshot)).recoveryError, null)
+})
+
+test('local delete against changed current conflicts on timer-state', () => {
+  let result = inFlight(initial(), {
+    type: 'discard',
+    patch: { 'timer-state': { state: 'deleted' } },
+    intended: deleted(),
+    draft: { state: 'deleted' },
+    argv: ['time', 'delete', '9', '--guard', token, '--yes']
+  })
+  result = guardRejected(result.state, 'operation-1', entry('9', {
+    note: 'Changed remotely',
+    token: 'b'.repeat(64)
+  }))
+
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.deepEqual(result.view.conflicts[0].groups.map(choice => choice.group), ['timer-state'])
+  assert.deepEqual(result.view.conflicts[0].groups[0].mine, { exists: false })
+  assert.deepEqual(result.view.conflicts[0].groups[0].freshbooks, { exists: true })
+})
+
+test('already achieved timer state settles while invalid structural transition conflicts', () => {
+  const base = activeTimer()
+  const paused = activeTimer({
+    segments: [activeTimer().segments[0], {
+      ...activeTimer().segments[0],
+      id: 'segment-2',
+      durationSeconds: 1800,
+      running: false,
+      token: '2'.repeat(64)
+    }],
+    state: 'paused',
+    elapsedAnchor: {
+      closedSeconds: 1800,
+      runningStartedAt: null,
+      observedAt: '2026-09-02T17:30:00.000Z'
+    },
+    token: 'b'.repeat(64)
+  })
+  let achieved = inFlight(initial([base]), {
+    type: 'pause',
+    scope: 'active-timer:timer-1',
+    base,
+    baseToken: token,
+    patch: { 'timer-state': { state: 'paused' } },
+    intended: paused,
+    draft: { state: 'paused' },
+    argv: ['timer', 'pause', '--id', 'timer-1', '--guard', token]
+  })
+  achieved = guardRejected(achieved.state, 'operation-1', paused)
+  assert.equal(achieved.state.operations[0].state, 'in-flight')
+  achieved = persisted(achieved.state, 'resolution-operation-1')
+  assert.equal(achieved.state.operations[0].state, 'settled')
+
+  const structurallyChanged = activeTimer({
+    segments: [{
+      ...activeTimer().segments[0],
+      id: 'replacement-segment',
+      startedAt: '2026-09-02T17:15:00.000Z',
+      token: '3'.repeat(64)
+    }],
+    elapsedAnchor: {
+      closedSeconds: 0,
+      runningStartedAt: '2026-09-02T17:15:00.000Z',
+      observedAt: '2026-09-02T17:30:00.000Z'
+    },
+    token: 'c'.repeat(64)
+  })
+  let invalid = inFlight(initial([base]), {
+    type: 'resume',
+    scope: 'active-timer:timer-1',
+    base,
+    baseToken: token,
+    patch: { 'timer-state': { state: 'paused' } },
+    intended: paused,
+    draft: { state: 'paused' },
+    argv: ['timer', 'pause', '--id', 'timer-1', '--guard', token]
+  })
+  invalid = guardRejected(invalid.state, 'operation-1', structurallyChanged)
+  assert.equal(invalid.state.operations[0].state, 'conflicted')
+  assert.deepEqual(invalid.view.conflicts[0].groups.map(choice => choice.group), ['timer-state'])
 })
