@@ -39,13 +39,14 @@ function segment() {
   }
 }
 
-function timer() {
+function timer(id = '901') {
+  const timerSegment = { ...segment(), timerId: id }
   return {
     contractVersion: 2,
     kind: 'active-timer',
-    id: '901',
+    id,
     exists: true,
-    segments: [segment()],
+    segments: [timerSegment],
     state: 'running',
     elapsedAnchor: {
       closedSeconds: 0,
@@ -87,6 +88,33 @@ function receipt(scope = 'time-entry:9') {
     }],
     results: [record],
     phase: null
+  }
+}
+
+function deleted(kind, id) {
+  return { contractVersion: 2, kind, id, exists: false, token: null }
+}
+
+function partialSwitchReceipt() {
+  const logged = entry('903')
+  const oldTimer = deleted('active-timer', '901')
+  return {
+    contractVersion: 2,
+    mutationKind: 'timer-switch',
+    changes: [
+      {
+        scope: 'time-entry:903',
+        before: { absent: true },
+        after: { record: logged }
+      },
+      {
+        scope: 'active-timer:901',
+        before: { token },
+        after: { deleted: true }
+      }
+    ],
+    results: [logged, oldTimer],
+    phase: { log: 'confirmed', start: 'failed' }
   }
 }
 
@@ -145,6 +173,10 @@ test('requires CLI 0.3.0 and canonical contract 2', () => {
 
   assert.equal(Contract.validateDiagnostics(diagnostics), true)
   assert.equal(Contract.validateDiagnostics({ ...diagnostics, version: '0.2.9' }), false)
+  assert.equal(Contract.validateDiagnostics({ ...diagnostics, version: '0.3.0-rc.1' }), false)
+  assert.equal(Contract.validateDiagnostics({ ...diagnostics, version: '0.3.0+build.8' }), true)
+  assert.equal(Contract.validateDiagnostics({ ...diagnostics, version: '0.3.1-beta.1' }), true)
+  assert.equal(Contract.validateDiagnostics({ ...diagnostics, version: '0.3.1-01' }), false)
   assert.equal(Contract.validateDiagnostics({ ...diagnostics, canonicalContractVersion: 1 }), false)
   assert.equal(Contract.validateDiagnostics({ ...diagnostics, capabilities: ['semantic-guards'] }), false)
 })
@@ -155,6 +187,13 @@ test('accepts complete canonical observations and receipts', () => {
   assert.equal(Contract.validateObservation(observation([{ ...entry(), durationSeconds: '3600' }])), false)
   assert.equal(Contract.validateReceipt({ ...receipt(), contractVersion: 1 }, mutation()), false)
   assert.equal(Contract.validateReceipt({ ...receipt(), results: [] }, mutation()), false)
+  assert.equal(Contract.validateObservation(observation([{ ...entry(), durationSeconds: 1.5 }])), false)
+  assert.equal(Contract.validateObservation(observation([{ ...entry(), startedAt: '2026-09-02' }])), false)
+  assert.equal(Contract.validateObservation(observation([{ ...entry(), localDate: '2026-02-30' }])), false)
+  const fractionalReceipt = receipt()
+  fractionalReceipt.changes[0].after.record.durationSeconds = 1.5
+  fractionalReceipt.results[0].durationSeconds = 1.5
+  assert.equal(Contract.validateReceipt(fractionalReceipt, mutation()), false)
 
   const observed = Contract.classifyProcessOutcome(readRequest(), {
     exitCode: 0,
@@ -195,6 +234,23 @@ test('rejects receipt that omits the operation scope', () => {
   })
   assert.equal(malformedRead.outcome, 'known-error')
   assert.equal(malformedRead.error.code, 'CLI_RECORD_SCHEMA_MISMATCH')
+
+  for (const scope of [undefined, '', 'not-a-canonical-scope']) {
+    const request = mutation()
+    if (scope === undefined) delete request.scope
+    else request.scope = scope
+    assert.equal(Contract.validateReceipt(receipt(), request), false)
+  }
+
+  const assignedCreate = receipt()
+  assignedCreate.mutationKind = 'time-entry-create'
+  assignedCreate.changes[0].before = { absent: true }
+  assert.equal(Contract.validateReceipt(assignedCreate, mutation({
+    scope: 'provisional:operation-8:time-entry-create'
+  })), true)
+  assert.equal(Contract.validateReceipt(assignedCreate, mutation({
+    scope: 'provisional:operation-8:timer-switch-target'
+  })), false)
 })
 
 test('classifies invalid JSON schema mismatch oversized signal and timeout mutations unknown', () => {
@@ -251,11 +307,7 @@ test('keeps auth validation permission and guard failures known', () => {
   assert.equal(guardResult.outcome, 'known-error')
   assert.deepEqual(guardResult.error.details.current, current)
 
-  const partialReceipt = {
-    ...receipt(),
-    mutationKind: 'timer-switch',
-    phase: { log: 'confirmed', start: 'failed' }
-  }
+  const partialReceipt = partialSwitchReceipt()
   const partial = {
     code: 'TIMER_SWITCH_PARTIAL',
     message: 'Logged but did not start',
@@ -264,11 +316,44 @@ test('keeps auth validation permission and guard failures known', () => {
       startError: { code: 'START_FAILED', message: 'Rejected' }
     }
   }
-  const partialResult = Contract.classifyProcessOutcome(mutation(), {
+  const partialRequest = mutation({ scope: 'active-timer:901' })
+  const classifyPartial = error => Contract.classifyProcessOutcome(partialRequest, {
     exitCode: 1,
     exitStatus: 0,
-    stderr: JSON.stringify({ schemaVersion: 1, ok: false, error: partial })
+    stderr: JSON.stringify({ schemaVersion: 1, ok: false, error })
   })
+  const partialResult = classifyPartial(partial)
   assert.equal(partialResult.outcome, 'known-error')
   assert.deepEqual(partialResult.error.details.partialReceipt, partialReceipt)
+
+  const withoutOldDeletion = {
+    ...partial,
+    details: {
+      ...partial.details,
+      partialReceipt: {
+        ...partialReceipt,
+        changes: partialReceipt.changes.slice(0, 1),
+        results: partialReceipt.results.slice(0, 1)
+      }
+    }
+  }
+  assert.equal(classifyPartial(withoutOldDeletion).outcome, 'unknown')
+
+  const started = timer('905')
+  const withInventedTimer = {
+    ...partial,
+    details: {
+      ...partial.details,
+      partialReceipt: {
+        ...partialReceipt,
+        changes: partialReceipt.changes.concat({
+          scope: 'active-timer:905',
+          before: { absent: true },
+          after: { record: started }
+        }),
+        results: partialReceipt.results.concat(started)
+      }
+    }
+  }
+  assert.equal(classifyPartial(withInventedTimer).outcome, 'unknown')
 })

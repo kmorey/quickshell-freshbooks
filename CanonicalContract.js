@@ -46,10 +46,20 @@ function sameValue(left, right) {
   return true
 }
 function isNonNegativeNumber(value) { return isFiniteNumber(value) && value >= 0 }
+function isNonNegativeInteger(value) { return isNonNegativeNumber(value) && Math.floor(value) === value }
 function isNullableId(value) { return value === null || isId(value) }
 function isToken(value) { return isString(value) && TOKEN_PATTERN.test(value) }
-function isDate(value) { return isString(value) && DATE_PATTERN.test(value) }
-function isInstant(value) { return isString(value) && !isNaN(Date.parse(value)) }
+function isDate(value) {
+  if (!isString(value) || !DATE_PATTERN.test(value)) return false
+  var parsed = new Date(value + "T00:00:00.000Z")
+  return !isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+function isInstant(value) {
+  if (!isString(value)
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false
+  var parsed = new Date(value)
+  return !isNaN(parsed.getTime()) && parsed.toISOString() === value
+}
 
 function validateTimeEntry(record) {
   if (!hasOnly(record, [
@@ -60,7 +70,7 @@ function validateTimeEntry(record) {
   return record.contractVersion === CONTRACT_VERSION
     && record.kind === "time-entry" && record.exists === true && isId(record.id)
     && isDate(record.localDate) && isInstant(record.startedAt)
-    && isNonNegativeNumber(record.durationSeconds)
+    && isNonNegativeInteger(record.durationSeconds)
     && isNullableId(record.projectId) && isNullableId(record.clientId)
     && isNullableId(record.serviceId) && isString(record.note)
     && isBoolean(record.billable) && isBoolean(record.billed) && isToken(record.token)
@@ -74,14 +84,14 @@ function validateTimerSegment(record) {
   return record.contractVersion === CONTRACT_VERSION
     && record.kind === "timer-segment" && record.exists === true
     && isId(record.id) && isId(record.timerId) && isInstant(record.startedAt)
-    && (record.durationSeconds === null || isNonNegativeNumber(record.durationSeconds))
+    && (record.durationSeconds === null || isNonNegativeInteger(record.durationSeconds))
     && isBoolean(record.running) && isBoolean(record.logged) && isToken(record.token)
     && (record.running === (record.durationSeconds === null && !record.logged))
 }
 
 function validateElapsedAnchor(anchor) {
   return hasOnly(anchor, ["closedSeconds", "runningStartedAt", "observedAt"])
-    && isNonNegativeNumber(anchor.closedSeconds)
+    && isNonNegativeInteger(anchor.closedSeconds)
     && (anchor.runningStartedAt === null || isInstant(anchor.runningStartedAt))
     && isInstant(anchor.observedAt)
 }
@@ -160,14 +170,17 @@ function validScope(scope) {
 }
 
 function requestScopeCovered(request, data) {
-  if (!request || !isString(request.scope) || request.scope.length === 0) return true
   for (var i = 0; i < data.changes.length; i++)
     if (data.changes[i].scope === request.scope) return true
   if (request.scope.indexOf("provisional:") !== 0) return false
   var expectedKind = request.scope.split(":")[2]
-  var scopePrefix = expectedKind === "time-entry-create" ? "time-entry:"
-    : expectedKind === "active-timer-create" || expectedKind === "timer-switch-target" ? "active-timer:"
-    : ""
+  var scopePrefix = ""
+  if (expectedKind === "time-entry-create" && data.mutationKind === "time-entry-create")
+    scopePrefix = "time-entry:"
+  else if (expectedKind === "active-timer-create" && data.mutationKind === "timer-start")
+    scopePrefix = "active-timer:"
+  else if (expectedKind === "timer-switch-target" && data.mutationKind === "timer-switch")
+    scopePrefix = "active-timer:"
   if (scopePrefix === "") return false
   for (var j = 0; j < data.changes.length; j++)
     if (data.changes[j].scope.indexOf(scopePrefix) === 0
@@ -176,6 +189,7 @@ function requestScopeCovered(request, data) {
 }
 
 function validateReceipt(data, request) {
+  if (!isObject(request) || !validScope(request.scope)) return false
   if (!hasOnly(data, ["contractVersion", "mutationKind", "changes", "results", "phase"])) return false
   if (data.contractVersion !== CONTRACT_VERSION
       || RECEIPT_KINDS.indexOf(data.mutationKind) === -1
@@ -240,14 +254,21 @@ function validateGuardRejection(error) {
 
 function semverAtLeast(version, minimum) {
   if (!isString(version)) return false
-  var match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version)
+  var match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version)
   if (!match) return false
+  if (match[4] !== undefined) {
+    var prerelease = match[4].split(".")
+    for (var identifierIndex = 0; identifierIndex < prerelease.length; identifierIndex++)
+      if (/^\d+$/.test(prerelease[identifierIndex])
+          && prerelease[identifierIndex].length > 1
+          && prerelease[identifierIndex][0] === "0") return false
+  }
   var actual = [Number(match[1]), Number(match[2]), Number(match[3])]
   for (var i = 0; i < 3; i++) {
     if (actual[i] > minimum[i]) return true
     if (actual[i] < minimum[i]) return false
   }
-  return true
+  return match[4] === undefined
 }
 
 function validateDiagnostics(data) {
@@ -306,13 +327,21 @@ function validateDeclaredError(error, request) {
   if (error.code === "GUARD_REJECTED") return validateGuardRejection(error)
   if (error.code === "TIMER_SWITCH_PARTIAL") {
     var details = error.details
-    return isObject(details) && validateReceipt(details.partialReceipt, request)
-      && hasOnly(details.startError, ["code", "message"])
-      && isString(details.startError.code) && details.startError.code.length > 0
-      && isString(details.startError.message) && details.startError.message.length > 0
-      && details.partialReceipt.phase !== null
-      && details.partialReceipt.phase.log === "confirmed"
-      && details.partialReceipt.phase.start === "failed"
+    if (!isObject(details) || !validateReceipt(details.partialReceipt, request)
+        || !hasOnly(details.startError, ["code", "message"])
+        || !isString(details.startError.code) || details.startError.code.length === 0
+        || !isString(details.startError.message) || details.startError.message.length === 0
+        || details.partialReceipt.phase.start !== "failed") return false
+    var loggedEntries = 0
+    var deletedTimers = 0
+    for (var i = 0; i < details.partialReceipt.results.length; i++) {
+      var result = details.partialReceipt.results[i]
+      if (result.kind === "time-entry" && result.exists === true) loggedEntries += 1
+      if (result.kind === "active-timer" && result.exists === false) deletedTimers += 1
+      if (result.kind === "active-timer" && result.exists === true) return false
+    }
+    return loggedEntries === 1 && deletedTimers === 1
+      && details.partialReceipt.results.length === 2
   }
   return true
 }
