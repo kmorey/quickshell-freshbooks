@@ -361,6 +361,23 @@ test('non-overlapping remote edit auto-merges and emits one newly guarded mutati
   assert.equal(result.effects[0].argv[result.effects[0].argv.indexOf('--guard') + 1], current.token)
 })
 
+test('note value --guard survives guarded rebase', () => {
+  let result = inFlight(initial(), {
+    patch: { note: '--guard' },
+    draft: { note: '--guard' },
+    argv: ['time', 'update', '9', '--note', '--guard', '--guard', token]
+  })
+  result = guardRejected(result.state, 'operation-1', entry('9', {
+    durationSeconds: 7200,
+    token: 'b'.repeat(64)
+  }))
+  result = persisted(result.state, 'operation-2')
+
+  assert.deepEqual(result.effects[0].argv, [
+    'time', 'update', '9', '--note', '--guard', '--guard', 'b'.repeat(64)
+  ])
+})
+
 test('same-field same-value settles without a choice', () => {
   let result = inFlight()
   result = guardRejected(result.state, 'operation-1', entry('9', {
@@ -490,6 +507,10 @@ test('freshbooks resolution adopts only selected group', () => {
   })
   assert.equal(reversed.state.operations[1].intended.note, 'Mine note')
   assert.equal(reversed.state.operations[1].intended.durationSeconds, 5000)
+  reversed = persisted(reversed.state, 'operation-2')
+  assert.deepEqual(reversed.effects[0].argv, [
+    'time', 'update', '9', '--note', 'Mine note', '--guard', 'b'.repeat(64)
+  ])
 })
 
 test('second remote change re-runs merge instead of applying stale choice', () => {
@@ -558,7 +579,10 @@ test('remote deletion with local edit offers restore or discard', () => {
 })
 
 test('restore as new omits deleted identity and uses provisional scope', () => {
-  let result = inFlight()
+  let result = inFlight(initial([entry('9', { projectId: null, serviceId: null })]), {
+    base: entry('9', { projectId: null, serviceId: null }),
+    patch: { note: 'Changed locally' }
+  })
   result = guardRejected(result.state, 'operation-1', deleted())
   result = Ledger.apply(result.state, {
     type: 'intent',
@@ -573,8 +597,16 @@ test('restore as new omits deleted identity and uses provisional scope', () => {
   assert.equal(replacement.baseToken, null)
   assert.equal(replacement.intended.id, 'provisional')
   assert.equal(replacement.intended.note, 'Changed locally')
+  assert.equal(replacement.intended.localDate, '2026-09-02')
+  assert.equal(replacement.intended.startedAt, '2026-09-02T17:00:00.000Z')
+  assert.notEqual(replacement.intended.token, token)
+  assert.equal(replacement.intended.clientId, null)
+  assert.equal(replacement.intended.billable, false)
   assert.equal(replacement.request.argv.includes('9'), false)
   assert.equal(replacement.request.argv.includes('--guard'), false)
+  assert.equal(replacement.request.argv.includes('--project'), false)
+  assert.equal(replacement.request.argv.includes('--service'), false)
+  assert.equal(replacement.request.argv.includes(''), false)
   assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
 
   const base = activeTimer()
@@ -597,7 +629,11 @@ test('restore as new omits deleted identity and uses provisional scope', () => {
   assert.equal(restoredTimer.scope, 'provisional:operation-2:active-timer-create')
   assert.equal(restoredTimer.intended.id, 'provisional')
   assert.equal(restoredTimer.intended.segments[0].timerId, 'provisional')
+  assert.notEqual(restoredTimer.intended.token, base.token)
+  assert.notEqual(restoredTimer.intended.segments[0].id, base.segments[0].id)
+  assert.notEqual(restoredTimer.intended.segments[0].token, base.segments[0].token)
   assert.equal(restoredTimer.request.argv.includes('timer-1'), false)
+  assert.equal(restoredTimer.request.argv.includes(''), false)
   assert.equal(Store.deserialize(Store.serialize(timerResult.effects[0].snapshot)).recoveryError, null)
 })
 
@@ -618,6 +654,29 @@ test('local delete against changed current conflicts on timer-state', () => {
   assert.deepEqual(result.view.conflicts[0].groups.map(choice => choice.group), ['timer-state'])
   assert.deepEqual(result.view.conflicts[0].groups[0].mine, { exists: false })
   assert.deepEqual(result.view.conflicts[0].groups[0].freshbooks, { exists: true })
+  result = Ledger.apply(result.state, {
+    type: 'intent',
+    intent: { type: 'choose-freshbooks', operationId: 'operation-1', group: 'timer-state' }
+  })
+  assert.equal(result.state.operations.length, 1)
+  assert.equal(result.state.operations[0].state, 'conflicted')
+  assert.equal(result.effects[0].transactionId, 'resolution-operation-1')
+  result = persisted(result.state, 'resolution-operation-1')
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.equal(result.view.records['time-entry:9'].note, 'Changed remotely')
+  assert.equal(result.effects.some(effect => effect.type === 'request'), false)
+})
+
+test('active timer duration belongs to only the duration group', () => {
+  const base = activeTimer()
+  const corrected = activeTimer({
+    elapsedAnchor: {
+      ...base.elapsedAnchor,
+      closedSeconds: 60
+    }
+  })
+
+  assert.deepEqual(Ledger.changedGroups(base, corrected), ['duration'])
 })
 
 test('already achieved timer state settles while invalid structural transition conflicts', () => {

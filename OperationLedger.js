@@ -70,7 +70,6 @@ function structuralValue(record) {
       timerId: segment.timerId,
       exists: segment.exists,
       startedAt: segment.startedAt,
-      durationSeconds: segment.durationSeconds,
       running: segment.running,
       logged: segment.logged
     })
@@ -79,10 +78,7 @@ function structuralValue(record) {
     exists: true,
     state: record.state,
     segments: segments,
-    elapsedAnchor: {
-      closedSeconds: record.elapsedAnchor.closedSeconds,
-      runningStartedAt: record.elapsedAnchor.runningStartedAt
-    }
+    runningStartedAt: record.elapsedAnchor.runningStartedAt
   }
 }
 
@@ -113,22 +109,30 @@ function changedGroups(base, candidate) {
 
 function copyGroup(target, source, group) {
   if (!source || source.exists === false) return clone(source)
+  if (group === "timer-state" && (!target || target.exists === false)) return clone(source)
   if (group === "note") target.note = source.note
   else if (group === "duration") {
-    if (source.kind === "active-timer") target.elapsedAnchor.closedSeconds = source.elapsedAnchor.closedSeconds
-    else target.durationSeconds = source.durationSeconds
+    if (source.kind === "active-timer") {
+      target.elapsedAnchor.closedSeconds = source.elapsedAnchor.closedSeconds
+      for (var i = 0; i < target.segments.length; i++) {
+        for (var j = 0; j < source.segments.length; j++) {
+          if (target.segments[i].id === source.segments[j].id)
+            target.segments[i].durationSeconds = source.segments[j].durationSeconds
+        }
+      }
+    } else target.durationSeconds = source.durationSeconds
   } else if (group === "date" && source.kind === "time-entry") {
     target.localDate = source.localDate
     target.startedAt = source.startedAt
   } else if (group === "assignment") {
     target.projectId = source.projectId
     target.serviceId = source.serviceId
-  } else if (group === "timer-state") {
-    if (source.kind === "active-timer") {
-      target.state = source.state
-      target.segments = clone(source.segments)
-      target.elapsedAnchor = clone(source.elapsedAnchor)
-    }
+  } else if (group === "timer-state" && source.kind === "active-timer") {
+    var closedSeconds = target.elapsedAnchor.closedSeconds
+    target.state = source.state
+    target.segments = clone(source.segments)
+    target.elapsedAnchor = clone(source.elapsedAnchor)
+    target.elapsedAnchor.closedSeconds = closedSeconds
   }
   return target
 }
@@ -169,6 +173,8 @@ function patchForGroups(record, groups) {
     var value = groupValue(record, group)
     if (group === "timer-state") {
       patch[group] = { state: value.exists === false ? "deleted" : value.state || "present" }
+    } else if (group === "duration" && record && record.kind === "active-timer") {
+      patch[group] = { durationSeconds: value }
     } else patch[group] = clone(value)
   }
   return patch
@@ -431,15 +437,61 @@ function operationById(state, operationId) {
 
 function guardedArgv(argv, token) {
   var result = []
+  var valueOptions = [
+    "--note", "--date", "--duration", "--project", "--service", "--id",
+    "--from", "--to"
+  ]
   for (var i = 0; i < argv.length; i++) {
-    if (argv[i] === "--guard") { i += 1; continue }
-    result.push(argv[i])
+    var argument = argv[i]
+    if (argument === "--guard") { i += 1; continue }
+    result.push(argument)
+    if (valueOptions.indexOf(argument) !== -1 && i + 1 < argv.length) {
+      result.push(argv[i + 1])
+      i += 1
+    }
   }
   if (token !== null && token !== undefined) {
     result.push("--guard")
     result.push(token)
   }
   return result
+}
+
+function addOption(argv, option, value, includeEmpty) {
+  if (value === null || value === undefined || value === "" && !includeEmpty) return
+  argv.push(option)
+  argv.push(String(value))
+}
+
+function replacementArgv(operation, base, intended, token) {
+  var groups = changedGroups(base, intended)
+  var argv
+  if (base.kind === "time-entry") {
+    if (intended.exists === false) argv = ["time", "delete", base.id, "--yes"]
+    else {
+      argv = ["time", "update", base.id]
+      if (groups.indexOf("date") !== -1) addOption(argv, "--date", intended.localDate, false)
+      if (groups.indexOf("duration") !== -1) addOption(argv, "--duration", intended.durationSeconds, false)
+      if (groups.indexOf("assignment") !== -1) {
+        addOption(argv, "--project", intended.projectId, false)
+        addOption(argv, "--service", intended.serviceId, false)
+      }
+      if (groups.indexOf("note") !== -1) addOption(argv, "--note", intended.note, true)
+    }
+  } else {
+    var action = operation.kind === "correct-duration" ? "correct"
+      : operation.kind === "update-note" ? "update" : operation.kind
+    argv = ["timer", action, "--id", base.id]
+    if (groups.indexOf("duration") !== -1)
+      addOption(argv, "--duration", intended.elapsedAnchor.closedSeconds, false)
+    if (groups.indexOf("assignment") !== -1) {
+      addOption(argv, "--project", intended.projectId, false)
+      addOption(argv, "--service", intended.serviceId, false)
+    }
+    if (groups.indexOf("note") !== -1) addOption(argv, "--note", intended.note, true)
+  }
+  addOption(argv, "--guard", token, false)
+  return argv
 }
 
 function publishRecord(state, scope, record) {
@@ -501,7 +553,7 @@ function replacementOperation(state, operation, base, intended, options) {
     request: {
       requestId: "request-" + sequence,
       commandClass: options.commandClass || operation.request.commandClass,
-      argv: options.argv || guardedArgv(operation.request.argv, baseToken)
+      argv: options.argv || replacementArgv(operation, base, intended, baseToken)
     },
     receipt: null,
     lineage: operation.operationId
@@ -554,6 +606,71 @@ function guardRejection(state, event) {
   return replacementOperation(next, operation, current, merge.merged)
 }
 
+function restoredProjection(record) {
+  var provisionalToken = "0000000000000000000000000000000000000000000000000000000000000000"
+  if (record.kind === "time-entry") return {
+    contractVersion: record.contractVersion,
+    kind: "time-entry",
+    id: "provisional",
+    exists: true,
+    localDate: record.localDate,
+    startedAt: record.startedAt,
+    durationSeconds: record.durationSeconds,
+    projectId: record.projectId,
+    clientId: null,
+    serviceId: record.serviceId,
+    note: record.note,
+    billable: false,
+    billed: false,
+    token: provisionalToken
+  }
+  var startedAt = record.elapsedAnchor.observedAt
+  return {
+    contractVersion: record.contractVersion,
+    kind: "active-timer",
+    id: "provisional",
+    exists: true,
+    segments: [{
+      contractVersion: record.contractVersion,
+      kind: "timer-segment",
+      id: "provisional-segment-1",
+      timerId: "provisional",
+      exists: true,
+      startedAt: startedAt,
+      durationSeconds: null,
+      running: true,
+      logged: false,
+      token: provisionalToken
+    }],
+    state: "running",
+    elapsedAnchor: {
+      closedSeconds: 0,
+      runningStartedAt: startedAt,
+      observedAt: startedAt
+    },
+    projectId: record.projectId,
+    clientId: null,
+    serviceId: record.serviceId,
+    note: record.note,
+    billable: false,
+    token: provisionalToken
+  }
+}
+
+function restoreArgv(record) {
+  var argv
+  if (record.kind === "active-timer") argv = ["timer", "start"]
+  else {
+    argv = ["time", "add"]
+    addOption(argv, "--date", record.localDate, false)
+    addOption(argv, "--duration", record.durationSeconds, false)
+  }
+  addOption(argv, "--project", record.projectId, false)
+  addOption(argv, "--service", record.serviceId, false)
+  addOption(argv, "--note", record.note, false)
+  return argv
+}
+
 function resolutionOperation(state, intent) {
   var source = intent.operationId ? operationById(state, intent.operationId)
     : activeOperationForScope(state, intent.scope)
@@ -564,24 +681,13 @@ function resolutionOperation(state, intent) {
   if (intent.type === "restore-as-new") {
     if (!operation.base || operation.base.exists !== false || !operation.intended
         || operation.intended.exists === false) return result(state, [])
-    var restored = clone(operation.intended)
-    restored.id = "provisional"
+    var restored = restoredProjection(operation.intended)
     var timer = restored.kind === "active-timer"
-    if (timer) {
-      for (var i = 0; i < restored.segments.length; i++) {
-        restored.segments[i].id = "provisional-segment-" + (i + 1)
-        restored.segments[i].timerId = "provisional"
-      }
-    }
-    var argv = timer
-      ? ["timer", "start", "--project", restored.projectId || "", "--service", restored.serviceId || "", "--note", restored.note]
-      : ["time", "add", "--date", restored.localDate, "--duration", String(restored.durationSeconds),
-        "--project", restored.projectId || "", "--service", restored.serviceId || "", "--note", restored.note]
     return replacementOperation(next, operation, null, restored, {
       scope: null,
       kind: timer ? "start" : "save-entry",
       commandClass: "single-write",
-      argv: argv,
+      argv: restoreArgv(restored),
       patch: patchForGroups(restored, changedGroups(null, restored))
     })
   }
