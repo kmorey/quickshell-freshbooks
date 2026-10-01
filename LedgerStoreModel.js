@@ -21,6 +21,11 @@ var DRAFT_KEYS = [
   "token", "baseToken", "expectedToken"
 ]
 var PATCH_KEYS = ["note", "duration", "date", "assignment", "timer-state"]
+var RECEIPT_KINDS = [
+  "time-entry-create", "time-entry-update", "time-entry-delete",
+  "timer-start", "timer-pause", "timer-resume", "timer-correct",
+  "timer-update", "timer-log", "timer-discard", "timer-switch"
+]
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -33,6 +38,17 @@ function isNullableId(value) { return value === null || isId(value) }
 function isInteger(value) { return typeof value === "number" && isFinite(value) && value >= 0 && Math.floor(value) === value }
 function isToken(value) { return isString(value) && TOKEN_PATTERN.test(value) }
 function isNullableToken(value) { return value === null || isToken(value) }
+function isDate(value) {
+  if (!isString(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  var parsed = new Date(value + "T00:00:00.000Z")
+  return !isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+function isInstant(value) {
+  if (!isString(value)
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false
+  var parsed = new Date(value)
+  return !isNaN(parsed.getTime()) && parsed.toISOString() === value
+}
 
 function hasOnly(value, required) {
   if (!isObject(value)) return false
@@ -104,7 +120,7 @@ function validRecord(record) {
       "contractVersion", "kind", "id", "exists", "localDate", "startedAt",
       "durationSeconds", "projectId", "clientId", "serviceId", "note",
       "billable", "billed", "token"
-    ]) && isString(record.localDate) && isString(record.startedAt)
+    ]) && isDate(record.localDate) && isInstant(record.startedAt)
       && isInteger(record.durationSeconds) && isNullableId(record.projectId)
       && isNullableId(record.clientId) && isNullableId(record.serviceId)
       && isString(record.note) && isBoolean(record.billable) && isBoolean(record.billed)
@@ -113,9 +129,10 @@ function validRecord(record) {
     return hasOnly(record, [
       "contractVersion", "kind", "id", "timerId", "exists", "startedAt",
       "durationSeconds", "running", "logged", "token"
-    ]) && isId(record.timerId) && isString(record.startedAt)
+    ]) && isId(record.timerId) && isInstant(record.startedAt)
       && (record.durationSeconds === null || isInteger(record.durationSeconds))
       && isBoolean(record.running) && isBoolean(record.logged) && isToken(record.token)
+      && (record.running === (record.durationSeconds === null && !record.logged))
   if (record.kind !== "active-timer" || !hasOnly(record, [
     "contractVersion", "kind", "id", "exists", "segments", "state",
     "elapsedAnchor", "projectId", "clientId", "serviceId", "note",
@@ -124,14 +141,19 @@ function validRecord(record) {
       || (record.state !== "running" && record.state !== "paused")
       || !hasOnly(record.elapsedAnchor, ["closedSeconds", "runningStartedAt", "observedAt"])
       || !isInteger(record.elapsedAnchor.closedSeconds)
-      || !(record.elapsedAnchor.runningStartedAt === null || isString(record.elapsedAnchor.runningStartedAt))
-      || !isString(record.elapsedAnchor.observedAt) || !isNullableId(record.projectId)
+      || !(record.elapsedAnchor.runningStartedAt === null || isInstant(record.elapsedAnchor.runningStartedAt))
+      || !isInstant(record.elapsedAnchor.observedAt) || !isNullableId(record.projectId)
       || !isNullableId(record.clientId) || !isNullableId(record.serviceId)
       || !isString(record.note) || !isBoolean(record.billable) || !isToken(record.token)) return false
-  for (var i = 0; i < record.segments.length; i++)
+  var running = 0
+  for (var i = 0; i < record.segments.length; i++) {
     if (!validRecord(record.segments[i]) || record.segments[i].kind !== "timer-segment"
         || record.segments[i].timerId !== record.id) return false
-  return true
+    if (record.segments[i].running) running += 1
+  }
+  return running <= 1
+    && (record.state === "running") === (running === 1)
+    && (record.state === "running") === (record.elapsedAnchor.runningStartedAt !== null)
 }
 
 function sanitizeSemanticObject(value, allowed) {
@@ -215,12 +237,142 @@ function validRequest(request) {
   return true
 }
 
-function validReceipt(receipt) {
-  if (!isObject(receipt) || receipt.contractVersion !== 2 || !isId(receipt.mutationKind)
-      || !Array.isArray(receipt.changes) || !Array.isArray(receipt.results)
-      || !(receipt.phase === null || isObject(receipt.phase))) return false
-  for (var i = 0; i < receipt.results.length; i++) if (!validRecord(receipt.results[i])) return false
+function validPatch(patch) {
+  if (!isObject(patch)) return false
+  var keys = Object.keys(patch)
+  for (var i = 0; i < keys.length; i++) if (PATCH_KEYS.indexOf(keys[i]) === -1) return false
+  if (patch.note !== undefined && !isString(patch.note)) return false
+  if (patch.duration !== undefined) {
+    var duration = patch.duration
+    if (!(isString(duration) || isInteger(duration)
+        || hasOnly(duration, ["durationSeconds"]) && isInteger(duration.durationSeconds))) return false
+  }
+  if (patch.date !== undefined) {
+    if (!isObject(patch.date) || Object.keys(patch.date).length === 0
+        || !hasRequiredAndOptional(patch.date, [], ["localDate", "startedAt"])
+        || patch.date.localDate !== undefined && !isString(patch.date.localDate)
+        || patch.date.startedAt !== undefined && !isString(patch.date.startedAt)) return false
+  }
+  if (patch.assignment !== undefined) {
+    var assignment = patch.assignment
+    if (!isObject(assignment) || Object.keys(assignment).length === 0
+        || !hasRequiredAndOptional(assignment, [], ["projectId", "serviceId", "clientId", "billable"])
+        || assignment.projectId !== undefined && !isNullableId(assignment.projectId)
+        || assignment.serviceId !== undefined && !isNullableId(assignment.serviceId)
+        || assignment.clientId !== undefined && !isNullableId(assignment.clientId)
+        || assignment.billable !== undefined && !isBoolean(assignment.billable)) return false
+  }
+  if (patch["timer-state"] !== undefined) {
+    var timerState = patch["timer-state"]
+    if (!isObject(timerState) || Object.keys(timerState).length === 0
+        || !hasRequiredAndOptional(timerState, [], ["state", "durationSeconds", "startedAt"])
+        || timerState.state !== undefined && !isString(timerState.state)
+        || timerState.durationSeconds !== undefined && !isInteger(timerState.durationSeconds)
+        || timerState.startedAt !== undefined && !isString(timerState.startedAt)) return false
+  }
   return true
+}
+
+function validDraft(draft) {
+  if (!isObject(draft)) return false
+  var keys = Object.keys(draft)
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i]
+    var value = draft[key]
+    if (DRAFT_KEYS.indexOf(key) === -1) return false
+    if ((key === "note" || key === "duration" || key === "localDate" || key === "startedAt"
+        || key === "state" || key === "timerId" || key === "entryId") && !isString(value)) return false
+    if (key === "durationSeconds" && !isInteger(value)) return false
+    if ((key === "projectId" || key === "serviceId" || key === "clientId") && !isNullableId(value)) return false
+    if ((key === "billable" || key === "billed") && !isBoolean(value)) return false
+    if ((key === "token" || key === "baseToken" || key === "expectedToken") && !isNullableToken(value)) return false
+  }
+  return true
+}
+
+function sameValue(left, right) {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    for (var i = 0; i < left.length; i++) if (!sameValue(left[i], right[i])) return false
+    return true
+  }
+  if (!isObject(left) || !isObject(right)) return false
+  var leftKeys = Object.keys(left).sort()
+  var rightKeys = Object.keys(right).sort()
+  if (!sameValue(leftKeys, rightKeys)) return false
+  for (var j = 0; j < leftKeys.length; j++)
+    if (!sameValue(left[leftKeys[j]], right[leftKeys[j]])) return false
+  return true
+}
+
+function validReceiptScope(scope) {
+  return isString(scope) && (/^(time-entry|active-timer):[^:]+$/.test(scope)
+    || /^provisional:operation-\d+:(time-entry-create|active-timer-create|timer-switch-target)$/.test(scope))
+}
+
+function receiptCoversOperation(operation, receipt) {
+  for (var i = 0; i < receipt.changes.length; i++)
+    if (receipt.changes[i].scope === operation.scope) return true
+  if (operation.scope.indexOf("provisional:") !== 0) return false
+  var expected = operation.scope.split(":")[2]
+  var prefix = ""
+  if (expected === "time-entry-create" && receipt.mutationKind === "time-entry-create") prefix = "time-entry:"
+  else if (expected === "active-timer-create" && receipt.mutationKind === "timer-start") prefix = "active-timer:"
+  else if (expected === "timer-switch-target" && receipt.mutationKind === "timer-switch") prefix = "active-timer:"
+  if (prefix === "") return false
+  for (var j = 0; j < receipt.changes.length; j++)
+    if (receipt.changes[j].scope.indexOf(prefix) === 0
+        && receipt.changes[j].before.absent === true) return true
+  return false
+}
+
+function validReceipt(receipt, operation) {
+  if (!hasOnly(receipt, ["contractVersion", "mutationKind", "changes", "results", "phase"])
+      || receipt.contractVersion !== 2 || RECEIPT_KINDS.indexOf(receipt.mutationKind) === -1
+      || !Array.isArray(receipt.changes) || receipt.changes.length === 0
+      || !Array.isArray(receipt.results)) return false
+  if (receipt.mutationKind === "timer-switch") {
+    if (!hasOnly(receipt.phase, ["log", "start"]) || receipt.phase.log !== "confirmed"
+        || ["confirmed", "failed"].indexOf(receipt.phase.start) === -1) return false
+  } else if (receipt.phase !== null) return false
+  var expectedResults = []
+  var seenScopes = {}
+  for (var i = 0; i < receipt.changes.length; i++) {
+    var change = receipt.changes[i]
+    if (!hasOnly(change, ["scope", "before", "after"]) || !validReceiptScope(change.scope)
+        || seenScopes[change.scope]) return false
+    seenScopes[change.scope] = true
+    var beforeToken = hasOnly(change.before, ["token"]) && isToken(change.before.token)
+    var beforeAbsent = hasOnly(change.before, ["absent"]) && change.before.absent === true
+    if (!beforeToken && !beforeAbsent) return false
+    if (hasOnly(change.after, ["record"]) && validRecord(change.after.record)) {
+      if (change.after.record.kind === "timer-segment"
+          || change.scope !== change.after.record.kind + ":" + change.after.record.id) return false
+      expectedResults.push(change.after.record)
+    } else if (hasOnly(change.after, ["deleted"]) && change.after.deleted === true) {
+      var parts = change.scope.split(":")
+      if (parts[0] === "provisional") return false
+      expectedResults.push({
+        contractVersion: 2,
+        kind: parts[0],
+        id: parts.slice(1).join(":"),
+        exists: false,
+        token: null
+      })
+    } else return false
+  }
+  if (receipt.results.length !== expectedResults.length) return false
+  var unmatched = receipt.results.slice()
+  for (var j = 0; j < expectedResults.length; j++) {
+    var found = -1
+    for (var k = 0; k < unmatched.length; k++)
+      if (sameValue(expectedResults[j], unmatched[k])) { found = k; break }
+    if (found === -1 || !validRecord(unmatched[found])
+        || unmatched[found].kind === "timer-segment") return false
+    unmatched.splice(found, 1)
+  }
+  return receiptCoversOperation(operation, receipt)
 }
 
 function validScope(scope, operationId) {
@@ -239,14 +391,15 @@ function validOperation(operation) {
       || !(operation.base === null || validRecord(operation.base))
       || !isNullableToken(operation.baseToken)
       || !(operation.expectedToken === undefined || isNullableToken(operation.expectedToken))
-      || !isObject(operation.patch) || !(operation.intended === null || validRecord(operation.intended))
+      || !validPatch(operation.patch) || !(operation.intended === null || validRecord(operation.intended))
       || !validRequest(operation.request) || !isId(operation.causalTag)
       || !(operation.lineage === null || isId(operation.lineage))) return false
   if (operation.state === "settled")
-    return operation.draft === null && operation.projection === null && validReceipt(operation.receipt)
+    return operation.draft === null && operation.projection === null
+      && validReceipt(operation.receipt, operation)
   if (operation.state === "superseded")
     return operation.draft === null && operation.projection === null
-  return isObject(operation.draft) && validRecord(operation.projection) && operation.receipt === null
+  return validDraft(operation.draft) && validRecord(operation.projection) && operation.receipt === null
 }
 
 function validSnapshot(snapshot) {
