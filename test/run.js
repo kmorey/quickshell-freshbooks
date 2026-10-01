@@ -1,3 +1,4 @@
+require('./canonical-contract.test.js')
 require('./fake-cli-model.test.js')
 require('./service-lifecycle.test.js')
 require('./scaffold-contract.test.js')
