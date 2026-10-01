@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const Ledger = require('../OperationLedger.js')
+const Store = require('../LedgerStoreModel.js')
 
 const token = 'a'.repeat(64)
 
@@ -107,7 +108,12 @@ test('persisted then request-started transitions prepared to in-flight', () => {
 
   const inFlight = started(afterSave.state)
   assert.equal(inFlight.state.operations[0].state, 'in-flight')
-  assert.deepEqual(inFlight.effects, [])
+  assert.deepEqual(inFlight.effects.map(effect => effect.type), ['persist'])
+  assert.equal(inFlight.effects[0].transactionId, 'started-operation-1')
+  assert.equal(inFlight.effects[0].snapshot.operations[0].state, 'in-flight')
+
+  const startSaved = persisted(inFlight.state, 'started-operation-1')
+  assert.deepEqual(startSaved.effects, [])
 })
 
 test('matching receipt settles clears draft and releases only its scope', () => {
@@ -120,13 +126,20 @@ test('matching receipt settles clears draft and releases only its scope', () => 
     outcome: 'receipt',
     data: matchingReceipt()
   })
+  assert.equal(result.state.operations[0].state, 'in-flight')
+  assert.deepEqual(result.state.operations[0].draft, { note: 'Changed locally', duration: '1:00' })
+  assert.equal(result.view.actions['time-entry:9'].canMutate, false)
+  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+  assert.equal(result.effects[0].transactionId, 'settlement-operation-1')
+  assert.equal(result.effects[0].snapshot.operations[0].state, 'settled')
 
+  result = persisted(result.state, 'settlement-operation-1')
   assert.equal(result.state.operations[0].state, 'settled')
   assert.equal(result.state.operations[0].draft, null)
   assert.equal(result.view.records['time-entry:9'].token, 'b'.repeat(64))
   assert.equal(result.view.actions['time-entry:9'].canMutate, true)
   assert.equal(result.view.actions['time-entry:10'].canMutate, true)
-  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+  assert.deepEqual(result.effects.map(effect => effect.type), ['compact'])
 })
 
 test('successful receipt emits zero mandatory follow-up reads', () => {
@@ -166,6 +179,31 @@ test('unrelated record remains mutable while one scope is locked', () => {
   assert.deepEqual(unrelated.effects.map(effect => effect.type), ['persist'])
 })
 
+test('settlement persistence failure retains recoverable draft projection and lock', () => {
+  let result = prepare()
+  result = persisted(result.state)
+  result = started(result.state)
+  result = Ledger.apply(result.state, {
+    type: 'completion',
+    operationId: 'operation-1',
+    outcome: 'receipt',
+    data: matchingReceipt()
+  })
+  result = Ledger.apply(result.state, {
+    type: 'persistence-failed',
+    transactionId: 'settlement-operation-1',
+    error: 'disk full'
+  })
+
+  assert.equal(result.state.operations[0].state, 'in-flight')
+  assert.deepEqual(result.state.operations[0].draft, { note: 'Changed locally', duration: '1:00' })
+  assert.equal(result.state.records['time-entry:9'].note, 'Changed locally')
+  assert.equal(result.state.records['time-entry:9'].token, token)
+  assert.equal(result.view.actions['time-entry:9'].canMutate, false)
+  assert.equal(result.view.errors[0].code, 'LEDGER_WRITE_FAILED')
+  assert.deepEqual(result.effects, [])
+})
+
 test('persistence failure never dispatches prepared mutation', () => {
   const prepared = prepare()
   const failed = Ledger.apply(prepared.state, {
@@ -196,4 +234,27 @@ test('creation uses operation identity in provisional scope', () => {
 
   assert.equal(result.state.operations[0].scope, 'provisional:operation-1:time-entry-create')
   assert.equal(result.effects[0].snapshot.operations[0].scope, 'provisional:operation-1:time-entry-create')
+})
+
+test('prepared in-flight and settled ledger snapshots round-trip through durable store', () => {
+  let result = prepare()
+  let restored = Store.deserialize(Store.serialize(result.effects[0].snapshot))
+  assert.equal(restored.recoveryError, null)
+  assert.equal(restored.snapshot.operations[0].state, 'prepared')
+
+  result = persisted(result.state)
+  result = started(result.state)
+  restored = Store.deserialize(Store.serialize(result.effects[0].snapshot))
+  assert.equal(restored.recoveryError, null)
+  assert.equal(restored.snapshot.operations[0].state, 'in-flight')
+
+  result = Ledger.apply(result.state, {
+    type: 'completion',
+    operationId: 'operation-1',
+    outcome: 'receipt',
+    data: matchingReceipt()
+  })
+  restored = Store.deserialize(Store.serialize(result.effects[0].snapshot))
+  assert.equal(restored.recoveryError, null)
+  assert.equal(restored.snapshot.operations[0].state, 'settled')
 })

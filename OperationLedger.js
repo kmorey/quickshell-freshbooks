@@ -267,6 +267,7 @@ function operationByTransaction(state, transactionId) {
   for (var i = state.operations.length - 1; i >= 0; i--) {
     var operation = state.operations[i]
     if (operation.operationId === transactionId
+        || "started-" + operation.operationId === transactionId
         || "settlement-" + operation.operationId === transactionId) return operation
   }
   return null
@@ -278,9 +279,13 @@ function persisted(state, event) {
   if (event.transactionId === operation.operationId && operation.state === "prepared")
     return result(state, [requestFor(operation)])
   if (event.transactionId === "settlement-" + operation.operationId
-      && operation.state === "settled" && operation.draft === null
-      && !activeOperationForScope(state, operation.scope))
-    return result(state, [{ type: "compact", operationId: operation.operationId }])
+      && operation.state === "in-flight" && operation.pendingSettlement) {
+    var next = cloneState(state)
+    var settled = operationByTransaction(next, event.transactionId)
+    applySettlement(next, settled, settled.pendingSettlement)
+    next.revision += 1
+    return result(next, [{ type: "compact", operationId: settled.operationId }])
+  }
   return result(state, [])
 }
 
@@ -292,7 +297,11 @@ function requestStarted(state, event) {
       operation.state = "in-flight"
       operation.request.requestId = event.requestId || operation.request.requestId
       next.revision += 1
-      return result(next, [])
+      return result(next, [{
+        type: "persist",
+        transactionId: "started-" + operation.operationId,
+        snapshot: durableSnapshot(next)
+      }])
     }
   }
   return result(state, [])
@@ -316,29 +325,37 @@ function receiptCovers(operation, receipt) {
   return false
 }
 
+function applySettlement(state, operation, receipt) {
+  for (var i = 0; i < receipt.results.length; i++) {
+    var record = receipt.results[i]
+    var scope = recordScope(record)
+    if (record.exists === false) delete state.records[scope]
+    else state.records[scope] = clone(record)
+  }
+  if (operation.scope.indexOf("provisional:") === 0) delete state.records[operation.scope]
+  operation.state = "settled"
+  operation.draft = null
+  operation.projection = null
+  operation.receipt = clone(receipt)
+  delete operation.pendingSettlement
+}
+
 function settleReceipt(state, event) {
   var next = cloneState(state)
   var operation = null
   for (var i = 0; i < next.operations.length; i++)
     if (next.operations[i].operationId === event.operationId) operation = next.operations[i]
-  if (!operation || operation.state !== "in-flight" || !receiptCovers(operation, event.data))
-    return result(state, [])
-  for (var j = 0; j < event.data.results.length; j++) {
-    var record = event.data.results[j]
-    var scope = recordScope(record)
-    if (record.exists === false) delete next.records[scope]
-    else next.records[scope] = clone(record)
-  }
-  if (operation.scope.indexOf("provisional:") === 0) delete next.records[operation.scope]
-  operation.state = "settled"
-  operation.draft = null
-  operation.projection = null
-  operation.receipt = clone(event.data)
-  next.revision += 1
+  if (!operation || operation.state !== "in-flight" || operation.pendingSettlement
+      || !receiptCovers(operation, event.data)) return result(state, [])
+  operation.pendingSettlement = clone(event.data)
+  var durable = cloneState(next)
+  var durableOperation = operationByTransaction(durable, "settlement-" + operation.operationId)
+  applySettlement(durable, durableOperation, event.data)
+  durable.revision += 1
   return result(next, [{
     type: "persist",
     transactionId: "settlement-" + operation.operationId,
-    snapshot: durableSnapshot(next)
+    snapshot: durableSnapshot(durable)
   }])
 }
 
