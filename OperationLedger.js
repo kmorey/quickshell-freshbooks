@@ -234,6 +234,10 @@ function restore(snapshot, options) {
   if (!isObject(snapshot) || snapshot.schemaVersion !== SCHEMA_VERSION
       || !Array.isArray(snapshot.operations) || !isObject(snapshot.records)) return null
   var operations = clone(snapshot.operations)
+  for (var i = 0; i < operations.length; i++)
+    if (operations[i].kind === "switch" && operations[i].state === "unknown"
+        && operations[i].base && operations[i].base.exists === false)
+      operations[i].reconciliation = { log: "settled", start: "unknown" }
   var sequence = maximumSequence(operations)
   options = options || {}
   return {
@@ -381,6 +385,51 @@ function requestFor(operation) {
   }
   if (request.stdin !== undefined) effect.stdin = request.stdin
   return effect
+}
+
+
+function reconciliationRequest(operation) {
+  var isTimer = operation.intended && operation.intended.kind === "active-timer"
+    || operation.base && operation.base.kind === "active-timer"
+  var queryKey
+  var argv
+  var coverage
+  if (isTimer) {
+    queryKey = "active-timer"
+    argv = ["timer", "status"]
+    coverage = { kind: "active-timer", complete: true, includesDeleted: true }
+  } else if (operation.scope.indexOf("time-entry:") === 0) {
+    var entryId = operation.scope.slice("time-entry:".length)
+    queryKey = "time-entry:" + entryId
+    argv = ["time", "get", entryId]
+    coverage = { kind: "time-entry", complete: true, includesDeleted: true }
+  } else {
+    var date = operation.intended && operation.intended.localDate
+    queryKey = "time-entries:" + (date || "reconciliation")
+    argv = ["time", "list"]
+    if (date) argv = argv.concat(["--from", date, "--to", date])
+    coverage = {
+      kind: "time-entry",
+      from: date,
+      to: date,
+      complete: true,
+      includesDeleted: true
+    }
+  }
+  return {
+    type: "request",
+    effectId: "effect-reconcile-" + operation.operationId.slice("operation-".length),
+    operationId: operation.operationId,
+    requestId: "reconcile-" + operation.request.requestId,
+    scope: operation.scope,
+    requestKind: "reconciliation",
+    priority: 2,
+    queryKey: queryKey,
+    coverage: coverage,
+    causalTag: operation.causalTag,
+    commandClass: "read",
+    argv: argv
+  }
 }
 
 function prepareIntent(state, intent) {
@@ -715,6 +764,219 @@ function resolutionOperation(state, intent) {
   return replacementOperation(next, operation, operation.base, operation.intended)
 }
 
+function semanticsEqual(left, right) {
+  if (!left || !right) return left === right
+  if (left.exists === false || right.exists === false)
+    return left.exists === false && right.exists === false
+  return changedGroups(left, right).length === 0
+}
+
+function creationSemanticsEqual(intended, candidate) {
+  if (!intended || !candidate || candidate.exists === false || intended.kind !== candidate.kind)
+    return false
+  if (intended.kind !== "active-timer") return semanticsEqual(intended, candidate)
+  return sameValue(groupValue(intended, "note"), groupValue(candidate, "note"))
+    && sameValue(groupValue(intended, "duration"), groupValue(candidate, "duration"))
+    && sameValue(groupValue(intended, "assignment"), groupValue(candidate, "assignment"))
+    && intended.state === candidate.state
+}
+
+function observationRecord(operation, records) {
+  for (var i = 0; i < records.length; i++)
+    if (recordScope(records[i]) === operation.scope) return records[i]
+  return null
+}
+
+function settleReconciliation(state, operation, record) {
+  if (operation.scope.indexOf("provisional:") === 0) delete state.records[operation.scope]
+  if (record) publishRecord(state, recordScope(record), record)
+  else publishRecord(state, operation.scope, record)
+  operation.state = "settled"
+  operation.base = clone(record)
+  operation.baseToken = record && record.token || null
+  operation.intended = clone(record)
+  operation.projection = null
+  operation.draft = null
+  operation.patch = {}
+}
+
+function markNotApplied(state, operation, current) {
+  operation.state = "not-applied"
+  operation.projection = clone(operation.intended)
+  publishRecord(state, operation.scope, current)
+}
+
+function classifyCreation(state, operation, event) {
+  if (event.complete !== true || event.includesDeleted !== true) return false
+  var baseline = []
+  var baselineScopes = Object.keys(state.records)
+  for (var b = 0; b < baselineScopes.length; b++)
+    if (baselineScopes[b].indexOf("provisional:") !== 0) baseline.push(baselineScopes[b])
+  var matches = []
+  for (var i = 0; i < event.records.length; i++) {
+    var record = event.records[i]
+    if (baseline.indexOf(recordScope(record)) === -1
+        && creationSemanticsEqual(operation.intended, record)) matches.push(record)
+  }
+  if (matches.length > 1) return false
+  if (matches.length === 1) settleReconciliation(state, operation, matches[0])
+  else markNotApplied(state, operation, null)
+  return true
+}
+
+function classifyChanged(state, operation, current) {
+  var merge = mergeThreeWay(operation.base, operation.intended, current)
+  if (merge.deletion) {
+    conflictOperation(state, operation, current, operation.intended, [])
+    return
+  }
+  var groups = merge.conflicts.slice()
+  if (groups.length === 0 && changedGroups(current, merge.merged).length !== 0)
+    groups = changedGroups(current, merge.merged)
+  if (groups.length === 0) settleReconciliation(state, operation, current)
+  else conflictOperation(state, operation, current, merge.merged, groups)
+}
+
+function classifyObservation(state, operation, event) {
+  if (!Array.isArray(event.records)) return false
+  if (operation.kind === "switch" && isObject(event.phase)
+      && event.phase.log === "confirmed" && event.phase.start !== "confirmed") {
+    for (var p = 0; p < event.records.length; p++) {
+      var confirmed = event.records[p]
+      if (confirmed.exists === false) publishRecord(state, recordScope(confirmed), null)
+      else publishRecord(state, recordScope(confirmed), confirmed)
+    }
+    if (operation.base) {
+      operation.base = {
+        contractVersion: operation.contractVersion,
+        kind: operation.base.kind,
+        id: operation.base.id,
+        exists: false,
+        token: null
+      }
+      operation.baseToken = null
+    }
+    operation.reconciliation = { log: "settled", start: "unknown" }
+    return true
+  }
+  if (operation.scope.indexOf("provisional:") === 0)
+    return classifyCreation(state, operation, event)
+  var current = observationRecord(operation, event.records)
+  if (!current) {
+    if (event.complete !== true || event.includesDeleted !== true) return false
+    var scope = operation.scope.split(":")
+    current = {
+      contractVersion: operation.contractVersion,
+      kind: scope[0],
+      id: scope.slice(1).join(":"),
+      exists: false,
+      token: null
+    }
+  }
+  if (semanticsEqual(current, operation.intended)) {
+    settleReconciliation(state, operation, current)
+    return true
+  }
+  if (semanticsEqual(current, operation.base)) {
+    markNotApplied(state, operation, current)
+    return true
+  }
+  classifyChanged(state, operation, current)
+  return true
+}
+
+function unknownCompletion(state, event) {
+  var source = operationById(state, event.operationId)
+  if (!source || source.state !== "in-flight") return result(state, [])
+  var next = cloneState(state)
+  var operation = operationById(next, event.operationId)
+  operation.state = "unknown"
+  operation.unknownError = clone(event.error || null)
+  next.revision += 1
+  return result(next, [{
+    type: "persist",
+    transactionId: "unknown-" + operation.operationId,
+    snapshot: durableSnapshot(next)
+  }])
+}
+
+function causalOrder(tag) {
+  var match = /(?:^|[^0-9])(\d+)$/.exec(String(tag || ""))
+  return match ? Number(match[1]) : null
+}
+
+function observationIsNewer(tag, operation) {
+  if (!operation) return true
+  var observed = causalOrder(tag)
+  var caused = causalOrder(operation.causalTag)
+  return observed !== null && caused !== null && observed > caused
+}
+
+function ordinaryObservation(state, event) {
+  if (event.cached === true || !Array.isArray(event.records)) return result(state, [])
+  var next = cloneState(state)
+  var changed = false
+  for (var i = 0; i < event.records.length; i++) {
+    var record = event.records[i]
+    var scope = recordScope(record)
+    var operation = null
+    for (var j = next.operations.length - 1; j >= 0; j--)
+      if (next.operations[j].scope === scope) { operation = next.operations[j]; break }
+    if (operation && LOCKING_STATES.indexOf(operation.state) !== -1) continue
+    if (!observationIsNewer(event.causalTag, operation)) continue
+    publishRecord(next, scope, record)
+    changed = true
+  }
+  if (!changed) return result(state, [])
+  next.revision += 1
+  return result(next, [])
+}
+
+function reconcileObservation(state, event) {
+  var source = operationById(state, event.operationId)
+  if (!source || source.state !== "unknown" || event.cached === true
+      || event.causalTag !== source.causalTag) return result(state, [])
+  var durable = cloneState(state)
+  var durableOperation = operationById(durable, event.operationId)
+  if (!classifyObservation(durable, durableOperation, event)) return result(state, [])
+  durable.revision += 1
+  var next = cloneState(state)
+  var pending = operationById(next, event.operationId)
+  pending.pendingReconciliation = {
+    operation: clone(durableOperation),
+    records: clone(durable.records)
+  }
+  return result(next, [{
+    type: "persist",
+    transactionId: "reconcile-" + event.operationId,
+    snapshot: durableSnapshot(durable)
+  }])
+}
+
+function startup(state) {
+  var next = cloneState(state)
+  var effects = []
+  var changed = false
+  for (var i = 0; i < next.operations.length; i++) {
+    var operation = next.operations[i]
+    if (operation.state === "in-flight") {
+      operation.state = "unknown"
+      changed = true
+    } else if (operation.state === "unknown") effects.push(reconciliationRequest(operation))
+  }
+  if (changed) {
+    next.revision += 1
+    var snapshot = durableSnapshot(next)
+    for (var j = 0; j < next.operations.length; j++)
+      if (state.operations[j].state === "in-flight") effects.push({
+        type: "persist",
+        transactionId: "unknown-" + next.operations[j].operationId,
+        snapshot: snapshot
+      })
+  }
+  return result(next, effects)
+}
+
 function operationByTransaction(state, transactionId) {
   for (var i = state.operations.length - 1; i >= 0; i--) {
     var operation = state.operations[i]
@@ -722,7 +984,9 @@ function operationByTransaction(state, transactionId) {
         || "started-" + operation.operationId === transactionId
         || "settlement-" + operation.operationId === transactionId
         || "conflict-" + operation.operationId === transactionId
-        || "resolution-" + operation.operationId === transactionId) return operation
+        || "resolution-" + operation.operationId === transactionId
+        || "unknown-" + operation.operationId === transactionId
+        || "reconcile-" + operation.operationId === transactionId) return operation
   }
   return null
 }
@@ -732,6 +996,25 @@ function persisted(state, event) {
   if (!operation) return result(state, [])
   if (event.transactionId === operation.operationId && operation.state === "prepared")
     return result(state, [requestFor(operation)])
+  if (event.transactionId === "unknown-" + operation.operationId
+      && operation.state === "unknown")
+    return result(state, [reconciliationRequest(operation)])
+  if (event.transactionId === "reconcile-" + operation.operationId
+      && operation.pendingReconciliation) {
+    var reconciled = cloneState(state)
+    var target = operationById(reconciled, operation.operationId)
+    var pending = target.pendingReconciliation
+    var replacement = clone(pending.operation)
+    delete replacement.pendingReconciliation
+    for (var r = 0; r < reconciled.operations.length; r++)
+      if (reconciled.operations[r].operationId === operation.operationId)
+        reconciled.operations[r] = replacement
+    reconciled.records = clone(pending.records)
+    reconciled.revision += 1
+    var reconciliationEffects = replacement.state === "settled"
+      ? [{ type: "compact", operationId: replacement.operationId }] : []
+    return result(reconciled, reconciliationEffects)
+  }
   if (event.transactionId === "resolution-" + operation.operationId
       && operation.pendingResolution !== undefined) {
     var resolved = cloneState(state)
@@ -834,10 +1117,11 @@ function persistenceFailed(state, event) {
   var operation = operationByTransaction(state, event.transactionId)
   if (!operation) return result(state, [])
   var next = cloneState(state)
-  if (event.transactionId === "resolution-" + operation.operationId) {
-    var unresolved = operationById(next, operation.operationId)
+  var unresolved = operationById(next, operation.operationId)
+  if (event.transactionId === "resolution-" + operation.operationId)
     delete unresolved.pendingResolution
-  }
+  if (event.transactionId === "reconcile-" + operation.operationId)
+    delete unresolved.pendingReconciliation
   next.errors.push({
     code: "LEDGER_WRITE_FAILED",
     message: String(event.error && event.error.message || event.error || "Ledger persistence failed"),
@@ -861,6 +1145,11 @@ function apply(state, event) {
   }
   if (event.type === "persisted") return persisted(state, event)
   if (event.type === "request-started") return requestStarted(state, event)
+  if (event.type === "startup") return startup(state)
+  if (event.type === "observation")
+    return event.operationId ? reconcileObservation(state, event) : ordinaryObservation(state, event)
+  if (event.type === "completion" && event.outcome === "unknown")
+    return unknownCompletion(state, event)
   if (event.type === "completion" && event.outcome === "receipt") return settleReceipt(state, event)
   if (event.type === "completion" && event.outcome === "known-error"
       && event.error && event.error.code === "GUARD_REJECTED") return guardRejection(state, event)

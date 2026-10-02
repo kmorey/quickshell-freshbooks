@@ -1,5 +1,6 @@
 require('./canonical-contract.test.js')
 require('./operation-ledger.test.js')
+require('./request-coordinator.test.js')
 require('./ledger-store-model.test.js')
 require('./fake-cli-model.test.js')
 require('./service-lifecycle.test.js')

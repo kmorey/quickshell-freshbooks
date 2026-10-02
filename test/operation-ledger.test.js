@@ -740,3 +740,296 @@ test('already achieved timer state settles while invalid structural transition c
   assert.equal(invalid.state.operations[0].state, 'conflicted')
   assert.deepEqual(invalid.view.conflicts[0].groups.map(choice => choice.group), ['timer-state'])
 })
+
+function reconcile(state, operationId, records, overrides = {}) {
+  let result = Ledger.apply(state, {
+    type: 'observation',
+    operationId,
+    records,
+    complete: true,
+    includesDeleted: true,
+    causalTag: state.operations.find(operation => operation.operationId === operationId).causalTag,
+    ...overrides
+  })
+  const persistence = result.effects.find(effect => effect.type === 'persist')
+  if (persistence) result = persisted(result.state, persistence.transactionId)
+  return result
+}
+
+function unknown(state, operationId = 'operation-1') {
+  let result = Ledger.apply(state, {
+    type: 'completion',
+    operationId,
+    outcome: 'unknown',
+    error: { code: 'PROCESS_TIMEOUT', message: 'Outcome is unknown' }
+  })
+  assert.equal(result.state.operations.find(operation => operation.operationId === operationId).state, 'unknown')
+  assert.deepEqual(result.effects.map(effect => effect.type), ['persist'])
+  result = persisted(result.state, `unknown-${operationId}`)
+  return result
+}
+
+test('unknown emits reconciliation only and never mutation retry', () => {
+  const result = unknown(inFlight().state)
+  assert.equal(result.effects.length, 1)
+  assert.equal(result.effects[0].requestKind, 'reconciliation')
+  assert.equal(result.effects[0].priority, 2)
+  assert.equal(result.effects.some(effect => effect.requestKind === 'mutation'), false)
+  assert.equal(result.effects[0].scope, 'time-entry:9')
+})
+
+test('update reconciliation classifies applied base and changed', () => {
+  let applied = unknown(inFlight().state)
+  applied = reconcile(applied.state, 'operation-1', [entry('9', {
+    note: 'Changed locally',
+    token: 'b'.repeat(64)
+  })])
+  assert.equal(applied.state.operations[0].state, 'settled')
+  assert.equal(applied.state.operations[0].draft, null)
+
+  let base = unknown(inFlight().state)
+  base = reconcile(base.state, 'operation-1', [entry()])
+  assert.equal(base.state.operations[0].state, 'not-applied')
+  assert.notEqual(base.state.operations[0].draft, null)
+  assert.equal(base.effects.some(effect => effect.requestKind === 'mutation'), false)
+
+  let changed = unknown(inFlight().state)
+  changed = reconcile(changed.state, 'operation-1', [entry('9', {
+    note: 'Changed remotely',
+    token: 'c'.repeat(64)
+  })])
+  assert.equal(changed.state.operations[0].state, 'conflicted')
+})
+
+test('delete reconciliation classifies absent base and changed', () => {
+  const deletion = {
+    type: 'discard',
+    patch: { 'timer-state': { state: 'deleted' } },
+    intended: deleted(),
+    draft: { note: 'Planning' },
+    argv: ['time', 'delete', '9', '--yes', '--guard', token]
+  }
+  let applied = unknown(inFlight(initial(), deletion).state)
+  applied = reconcile(applied.state, 'operation-1', [deleted()])
+  assert.equal(applied.state.operations[0].state, 'settled')
+
+  let base = unknown(inFlight(initial(), deletion).state)
+  base = reconcile(base.state, 'operation-1', [entry()])
+  assert.equal(base.state.operations[0].state, 'not-applied')
+
+  let changed = unknown(inFlight(initial(), deletion).state)
+  changed = reconcile(changed.state, 'operation-1', [entry('9', {
+    note: 'Changed remotely',
+    token: 'b'.repeat(64)
+  })])
+  assert.equal(changed.state.operations[0].state, 'conflicted')
+  assert.deepEqual(changed.view.conflicts[0].groups.map(group => group.group), ['timer-state'])
+})
+
+test('create reconciliation classifies unique absent-baseline match no match and duplicate ambiguity', () => {
+  const intended = entry('provisional', { token: 'd'.repeat(64) })
+  const create = {
+    type: 'save-entry',
+    scope: null,
+    base: null,
+    baseToken: null,
+    intended,
+    patch: { note: intended.note },
+    draft: { note: intended.note },
+    argv: ['time', 'create', '--note', intended.note]
+  }
+  const matching = entry('11', { token: 'e'.repeat(64) })
+  let unique = unknown(inFlight(initial([entry('10')]), create).state)
+  unique = reconcile(unique.state, 'operation-1', [entry('10'), matching])
+  assert.equal(unique.state.operations[0].state, 'settled')
+  assert.equal(unique.state.records['time-entry:11'].id, '11')
+
+  let absent = unknown(inFlight(initial([entry('10')]), create).state)
+  absent = reconcile(absent.state, 'operation-1', [entry('10')])
+  assert.equal(absent.state.operations[0].state, 'not-applied')
+
+  let duplicate = unknown(inFlight(initial([entry('10')]), create).state)
+  duplicate = reconcile(duplicate.state, 'operation-1', [
+    entry('10'),
+    matching,
+    entry('12', { token: 'f'.repeat(64) })
+  ])
+  assert.equal(duplicate.state.operations[0].state, 'unknown')
+})
+
+test('timer transition reconciliation uses logical semantics', () => {
+  const base = activeTimer()
+  const intended = activeTimer({
+    segments: [{
+      ...activeTimer().segments[0],
+      durationSeconds: 1800,
+      running: false,
+      token: '2'.repeat(64)
+    }],
+    state: 'paused',
+    elapsedAnchor: {
+      closedSeconds: 1800,
+      runningStartedAt: null,
+      observedAt: '2026-09-02T17:30:00.000Z'
+    },
+    token: 'b'.repeat(64)
+  })
+  let result = unknown(inFlight(initial([base]), {
+    type: 'pause',
+    scope: 'active-timer:timer-1',
+    base,
+    intended,
+    patch: { 'timer-state': { state: 'paused' } },
+    draft: { state: 'paused' },
+    argv: ['timer', 'pause', '--id', 'timer-1', '--guard', token]
+  }).state)
+  const equivalent = {
+    ...intended,
+    token: 'c'.repeat(64),
+    segments: intended.segments.map(segment => ({ ...segment, token: '3'.repeat(64) })),
+    elapsedAnchor: { ...intended.elapsedAnchor, observedAt: '2026-09-02T17:31:00.000Z' }
+  }
+  result = reconcile(result.state, 'operation-1', [equivalent])
+  assert.equal(result.state.operations[0].state, 'settled')
+})
+
+test('partial switch reconciles log and start separately', () => {
+  const base = activeTimer()
+  const target = activeTimer({
+    id: 'target',
+    segments: activeTimer().segments.map(segment => ({ ...segment, id: 'target-segment', timerId: 'target' })),
+    projectId: '77',
+    token: 'b'.repeat(64)
+  })
+  let result = unknown(inFlight(initial([base]), {
+    type: 'switch',
+    scope: null,
+    base,
+    intended: target,
+    patch: { assignment: { projectId: '77' } },
+    draft: { projectId: '77' },
+    argv: ['timer', 'switch', '--project', '77'],
+    commandClass: 'switch'
+  }).state)
+  result = reconcile(result.state, 'operation-1', [entry('20', {
+    note: base.note,
+    projectId: base.projectId,
+    token: 'c'.repeat(64)
+  })], {
+    phase: { log: 'confirmed', start: 'failed' }
+  })
+  assert.equal(result.state.operations[0].state, 'unknown')
+  assert.equal(result.state.operations[0].reconciliation.log, 'settled')
+  assert.equal(result.state.operations[0].reconciliation.start, 'unknown')
+  assert.equal(result.state.records['time-entry:20'].id, '20')
+
+  const partialSnapshot = Store.deserialize(Store.serialize({
+    schemaVersion: result.state.schemaVersion,
+    operations: result.state.operations,
+    records: result.state.records
+  })).snapshot
+  result = Ledger.apply(Ledger.restore(partialSnapshot), { type: 'startup' })
+  assert.equal(result.state.operations[0].reconciliation.log, 'settled')
+  assert.equal(result.state.records['time-entry:20'].id, '20')
+})
+
+test('receipt followed by delayed pre-mutation observation never rolls back', () => {
+  let result = inFlight()
+  result = Ledger.apply(result.state, {
+    type: 'completion',
+    operationId: 'operation-1',
+    outcome: 'receipt',
+    data: matchingReceipt()
+  })
+  result = persisted(result.state, 'settlement-operation-1')
+  const settledRecord = result.state.records['time-entry:9']
+  result = Ledger.apply(result.state, {
+    type: 'observation',
+    records: [entry()],
+    complete: true,
+    includesDeleted: true,
+    causalTag: 'cause-0'
+  })
+  assert.deepEqual(result.state.records['time-entry:9'], settledRecord)
+  assert.equal(result.state.operations[0].state, 'settled')
+
+  const later = entry('9', { note: 'Changed again later', token: 'c'.repeat(64) })
+  result = Ledger.apply(result.state, {
+    type: 'observation',
+    records: [later],
+    complete: true,
+    includesDeleted: true,
+    causalTag: 'cause-2'
+  })
+  assert.deepEqual(result.state.records['time-entry:9'], later)
+})
+
+test('startup restores projection draft lock and reconciliation', () => {
+  let result = unknown(inFlight().state)
+  const snapshot = {
+    schemaVersion: result.state.schemaVersion,
+    operations: result.state.operations,
+    records: result.state.records
+  }
+  const restored = Ledger.restore(snapshot)
+  result = Ledger.apply(restored, { type: 'startup' })
+  assert.equal(result.view.records['time-entry:9'].note, 'Changed locally')
+  assert.equal(result.view.operations[0].draftAvailable, true)
+  assert.equal(result.view.actions['time-entry:9'].canMutate, false)
+  assert.deepEqual(result.effects.map(effect => effect.requestKind), ['reconciliation'])
+
+  let interrupted = inFlight()
+  const interruptedSnapshot = Store.deserialize(Store.serialize({
+    schemaVersion: interrupted.state.schemaVersion,
+    operations: interrupted.state.operations,
+    records: interrupted.state.records
+  })).snapshot
+  interrupted = Ledger.apply(Ledger.restore(interruptedSnapshot), { type: 'startup' })
+  assert.equal(interrupted.state.operations[0].state, 'unknown')
+  assert.deepEqual(interrupted.effects.map(effect => effect.type), ['persist'])
+  interrupted = persisted(interrupted.state, 'unknown-operation-1')
+  assert.deepEqual(interrupted.effects.map(effect => effect.requestKind), ['reconciliation'])
+
+  const baseline = entry('10')
+  const intended = entry('provisional', { token: 'd'.repeat(64) })
+  let creationResult = unknown(inFlight(initial([baseline]), {
+    type: 'save-entry',
+    scope: null,
+    base: null,
+    baseToken: null,
+    intended,
+    patch: { note: intended.note },
+    draft: { note: intended.note },
+    argv: ['time', 'create', '--note', intended.note]
+  }).state)
+  let creation = creationResult.state
+  assert.deepEqual(creation.operations.map(operation => operation.operationId), ['operation-1'])
+  const durableCreation = Store.deserialize(Store.serialize({
+    schemaVersion: creation.schemaVersion,
+    operations: creation.operations,
+    records: creation.records
+  }))
+  assert.equal(durableCreation.recoveryError, null)
+  assert.deepEqual(durableCreation.snapshot.operations.map(operation => operation.operationId), ['operation-1'])
+  creation = Ledger.apply(Ledger.restore(durableCreation.snapshot), { type: 'startup' })
+  creation = reconcile(creation.state, 'operation-1', [
+    baseline,
+    entry('11', { token: 'e'.repeat(64) })
+  ])
+  assert.equal(creation.state.operations[0].state, 'settled')
+})
+
+test('stale cached or older causal observation cannot settle or roll back', () => {
+  let result = unknown(inFlight().state)
+  const before = result.state.records['time-entry:9']
+  result = reconcile(result.state, 'operation-1', [entry('9', {
+    note: 'Changed locally',
+    token: 'b'.repeat(64)
+  })], { cached: true })
+  assert.equal(result.state.operations[0].state, 'unknown')
+  assert.deepEqual(result.state.records['time-entry:9'], before)
+
+  result = reconcile(result.state, 'operation-1', [entry()], { causalTag: 'cause-0' })
+  assert.equal(result.state.operations[0].state, 'unknown')
+  assert.deepEqual(result.state.records['time-entry:9'], before)
+})
