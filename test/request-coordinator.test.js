@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const Coordinator = require('../RequestCoordinator.js')
+const Ledger = require('../OperationLedger.js')
 
 const budgets = { read: 64000, 'single-write': 128000, 'multi-segment': 320000, log: 192000, switch: 320000 }
 
@@ -33,6 +34,52 @@ function finish(state, request, type = 'adapter-succeeded') {
     causalTag: request.causalTag,
     data: { ok: true }
   })
+}
+
+function ledgerReconciliationEffect() {
+  const token = 'a'.repeat(64)
+  const base = {
+    contractVersion: 2,
+    kind: 'time-entry',
+    id: '9',
+    exists: true,
+    localDate: '2026-09-02',
+    startedAt: '2026-09-02T17:00:00.000Z',
+    durationSeconds: 3600,
+    projectId: '44',
+    clientId: '55',
+    serviceId: '66',
+    note: 'Planning',
+    billable: true,
+    billed: false,
+    token
+  }
+  let result = Ledger.apply(Ledger.initialState({ records: [base] }), {
+    type: 'intent',
+    intent: {
+      type: 'save-entry',
+      scope: 'time-entry:9',
+      base,
+      baseToken: token,
+      patch: { note: 'Changed locally' },
+      draft: { note: 'Changed locally' },
+      argv: ['time', 'update', '9'],
+      commandClass: 'single-write'
+    }
+  })
+  result = Ledger.apply(result.state, { type: 'persisted', transactionId: 'operation-1' })
+  result = Ledger.apply(result.state, {
+    type: 'request-started',
+    operationId: 'operation-1',
+    requestId: 'request-1'
+  })
+  result = Ledger.apply(result.state, {
+    type: 'completion',
+    operationId: 'operation-1',
+    outcome: 'unknown'
+  })
+  result = Ledger.apply(result.state, { type: 'persisted', transactionId: 'unknown-operation-1' })
+  return result.effects[0]
 }
 
 test('capacity never exceeds one', () => {
@@ -168,6 +215,77 @@ test('classified adapter failure preserves unknown mutation outcome', () => {
   assert.equal(result.actions[0].outcome, 'unknown')
 })
 
+
+test('ordinary equivalent read cannot supersede queued reconciliation consumer', () => {
+  let state = Coordinator.initialState(budgets)
+  state = enqueue(state, effect('blocker', {
+    requestKind: 'mutation',
+    priority: 1,
+    queryKey: null,
+    operationId: 'operation-0',
+    scope: 'time-entry:0',
+    commandClass: 'single-write'
+  })).state
+  const reconciliation = ledgerReconciliationEffect()
+  state = enqueue(state, reconciliation).state
+  const ordinary = effect('ordinary', {
+    requestKind: 'visible-read',
+    priority: 3,
+    queryKey: reconciliation.queryKey,
+    scope: reconciliation.scope,
+    coverage: reconciliation.coverage
+  })
+  const result = enqueue(state, ordinary)
+  assert.equal(result.state.queue.some(request => request.requestId === reconciliation.requestId), true)
+  assert.equal(result.actions.some(action => action.request
+    && action.request.requestId === reconciliation.requestId), false)
+})
+
+test('ordinary equivalent read cannot stale active reconciliation completion', () => {
+  const reconciliation = ledgerReconciliationEffect()
+  let result = enqueue(Coordinator.initialState(budgets), reconciliation)
+  let state = result.state
+  state = enqueue(state, effect('ordinary', {
+    requestKind: 'visible-read',
+    priority: 3,
+    queryKey: reconciliation.queryKey,
+    scope: reconciliation.scope,
+    coverage: reconciliation.coverage
+  })).state
+  result = finish(state, reconciliation)
+  assert.equal(result.actions[0].type, 'complete')
+  assert.equal(result.actions[0].operationId, 'operation-1')
+  assert.equal(result.actions[0].outcome, 'observation')
+})
+
+test('actual identity reconciliation is not subsumed by complete unrelated range', () => {
+  let state = Coordinator.initialState(budgets)
+  state = enqueue(state, effect('blocker', {
+    requestKind: 'mutation',
+    priority: 1,
+    queryKey: null,
+    operationId: 'operation-0',
+    scope: 'time-entry:0',
+    commandClass: 'single-write'
+  })).state
+  const reconciliation = ledgerReconciliationEffect()
+  state = enqueue(state, reconciliation).state
+  const result = enqueue(state, effect('october', {
+    requestKind: 'visible-read',
+    priority: 3,
+    queryKey: 'entries:october',
+    coverage: {
+      kind: 'time-entry',
+      identity: null,
+      from: '2026-10-01',
+      to: '2026-10-31',
+      complete: true,
+      includesDeleted: true
+    }
+  }))
+  assert.equal(reconciliation.coverage.identity, 'time-entry:9')
+  assert.equal(result.state.queue.some(request => request.requestId === reconciliation.requestId), true)
+})
 
 test('outer deadline exceeds advertised class budget and reports mutation unknown', () => {
   let state = Coordinator.initialState(budgets)

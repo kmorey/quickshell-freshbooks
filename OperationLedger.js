@@ -395,26 +395,49 @@ function reconciliationRequest(operation) {
   var argv
   var coverage
   if (isTimer) {
-    queryKey = "active-timer"
+    var timerIdentity = operation.scope.indexOf("active-timer:") === 0
+      ? operation.scope : null
+    queryKey = timerIdentity || "active-timer"
     argv = ["timer", "status"]
-    coverage = { kind: "active-timer", complete: true, includesDeleted: true }
+    coverage = {
+      kind: "active-timer",
+      identity: timerIdentity,
+      from: null,
+      to: null,
+      complete: true,
+      includesDeleted: true
+    }
   } else if (operation.scope.indexOf("time-entry:") === 0) {
     var entryId = operation.scope.slice("time-entry:".length)
+    var entryDate = operation.intended && operation.intended.localDate
+      || operation.base && operation.base.localDate || null
     queryKey = "time-entry:" + entryId
     argv = ["time", "get", entryId]
-    coverage = { kind: "time-entry", complete: true, includesDeleted: true }
+    coverage = {
+      kind: "time-entry",
+      identity: operation.scope,
+      from: entryDate,
+      to: entryDate,
+      complete: true,
+      includesDeleted: true
+    }
   } else {
-    var date = operation.intended && operation.intended.localDate
+    var date = operation.intended && operation.intended.localDate || null
     queryKey = "time-entries:" + (date || "reconciliation")
     argv = ["time", "list"]
     if (date) argv = argv.concat(["--from", date, "--to", date])
     coverage = {
       kind: "time-entry",
+      identity: null,
       from: date,
       to: date,
       complete: true,
       includesDeleted: true
     }
+  }
+  if (operation.creationBaseline) {
+    queryKey = operation.creationBaseline.queryKey
+    coverage = clone(operation.creationBaseline.coverage)
   }
   return {
     type: "request",
@@ -429,6 +452,27 @@ function reconciliationRequest(operation) {
     causalTag: operation.causalTag,
     commandClass: "read",
     argv: argv
+  }
+}
+
+function creationBaseline(state, operation) {
+  if (operation.scope.indexOf("provisional:") !== 0) return null
+  var descriptor = reconciliationRequest(operation)
+  var coverage = descriptor.coverage
+  var identities = []
+  var scopes = Object.keys(state.records)
+  for (var i = 0; i < scopes.length; i++) {
+    var record = state.records[scopes[i]]
+    if (!record || record.exists === false || record.kind !== coverage.kind) continue
+    if (coverage.from && record.localDate < coverage.from) continue
+    if (coverage.to && record.localDate > coverage.to) continue
+    identities.push(recordScope(record))
+  }
+  identities.sort()
+  return {
+    queryKey: descriptor.queryKey,
+    coverage: clone(coverage),
+    identities: identities
   }
 }
 
@@ -468,6 +512,8 @@ function prepareIntent(state, intent) {
     receipt: null,
     lineage: intent.lineage || null
   }
+  var baseline = creationBaseline(next, operation)
+  if (baseline) operation.creationBaseline = baseline
   next.operations.push(operation)
   next.records[scope] = clone(intended)
   next.revision += 1
@@ -808,10 +854,7 @@ function markNotApplied(state, operation, current) {
 
 function classifyCreation(state, operation, event) {
   if (event.complete !== true || event.includesDeleted !== true) return false
-  var baseline = []
-  var baselineScopes = Object.keys(state.records)
-  for (var b = 0; b < baselineScopes.length; b++)
-    if (baselineScopes[b].indexOf("provisional:") !== 0) baseline.push(baselineScopes[b])
+  var baseline = operation.creationBaseline && operation.creationBaseline.identities || []
   var matches = []
   for (var i = 0; i < event.records.length; i++) {
     var record = event.records[i]

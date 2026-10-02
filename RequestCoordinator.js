@@ -77,9 +77,21 @@ function sameQuery(left, right) {
 function covers(broad, narrow) {
   if (!broad || !narrow || broad.kind !== narrow.kind || broad.complete !== true) return false
   if (narrow.includesDeleted === true && broad.includesDeleted !== true) return false
-  if (narrow.from !== undefined && (broad.from === undefined || broad.from > narrow.from)) return false
-  if (narrow.to !== undefined && (broad.to === undefined || broad.to < narrow.to)) return false
+  if (narrow.identity) {
+    if (broad.identity) return broad.identity === narrow.identity
+    if (!narrow.from || !narrow.to) return false
+  } else if (broad.identity) return false
+  if (narrow.from && (!broad.from || broad.from > narrow.from)) return false
+  if (narrow.to && (!broad.to || broad.to < narrow.to)) return false
   return true
+}
+
+function canSupersede(newer, older) {
+  if (!isRead(newer) || !isRead(older)) return false
+  if (older.requestKind === "reconciliation"
+      && (newer.requestKind !== "reconciliation"
+        || newer.operationId !== older.operationId)) return false
+  return sameQuery(newer, older) || covers(newer.coverage, older.coverage)
 }
 
 function dropQueuedReads(state, request, actions) {
@@ -87,7 +99,7 @@ function dropQueuedReads(state, request, actions) {
   for (var i = state.queue.length - 1; i >= 0; i--) {
     var queued = state.queue[i]
     if (!isRead(queued)) continue
-    if (!sameQuery(request, queued) && !covers(request.coverage, queued.coverage)) continue
+    if (!canSupersede(request, queued)) continue
     state.queue.splice(i, 1)
     actions.push({ type: "drop", request: clone(queued), reason: "superseded" })
   }
@@ -161,7 +173,16 @@ function enqueue(state, event) {
   var request = clone(event.effect)
   request.enqueueSequence = next.nextSequence++
   request.canceled = false
-  if (isRead(request) && request.queryKey) next.latestQueries[request.queryKey] = request.enqueueSequence
+  var protectsReconciliation = false
+  if (isRead(request)) {
+    if (next.active && sameQuery(request, next.active)
+        && !canSupersede(request, next.active)) protectsReconciliation = true
+    for (var i = 0; i < next.queue.length; i++)
+      if (sameQuery(request, next.queue[i])
+          && !canSupersede(request, next.queue[i])) protectsReconciliation = true
+  }
+  if (isRead(request) && request.queryKey && !protectsReconciliation)
+    next.latestQueries[request.queryKey] = request.enqueueSequence
   dropMutationReads(next, request, actions)
   dropAffectedDuplicates(next, request, actions)
   dropQueuedReads(next, request, actions)

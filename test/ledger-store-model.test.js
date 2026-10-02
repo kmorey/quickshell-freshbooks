@@ -155,6 +155,32 @@ test('serialization strips nested receipt transport extras', () => {
   assert.equal(/receipt-password|receipt-raw|receipt-client-secret/.test(serialized), false)
 })
 
+test('creation baseline round-trips as typed query-scoped identities', () => {
+  const value = snapshot()
+  value.operations[0].creationBaseline = {
+    queryKey: 'time-entries:2026-09-02',
+    coverage: {
+      kind: 'time-entry',
+      identity: null,
+      from: '2026-09-02',
+      to: '2026-09-02',
+      complete: true,
+      includesDeleted: true
+    },
+    identities: ['time-entry:9']
+  }
+  const restored = Store.deserialize(Store.serialize(value))
+  assert.equal(restored.recoveryError, null)
+  assert.deepEqual(restored.snapshot.operations[0].creationBaseline, value.operations[0].creationBaseline)
+
+  value.operations[0].creationBaseline.identities = [{ scope: 'time-entry:9' }]
+  assert.throws(() => Store.serialize(value), /invalid durable ledger snapshot/)
+
+  value.operations[0].creationBaseline.identities = ['time-entry:9']
+  value.operations[0].creationBaseline.coverage.identity = 'active-timer:timer-1'
+  assert.throws(() => Store.serialize(value), /invalid durable ledger snapshot/)
+})
+
 test('valid schema 1 restores', () => {
   const serialized = Store.serialize(snapshot())
   const restored = Store.deserialize(serialized)

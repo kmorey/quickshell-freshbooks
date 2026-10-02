@@ -857,6 +857,40 @@ test('create reconciliation classifies unique absent-baseline match no match and
   assert.equal(duplicate.state.operations[0].state, 'unknown')
 })
 
+test('create reconciliation keeps pre-dispatch identity baseline across observation and restart', () => {
+  const baseline = entry('10')
+  const intended = entry('provisional', { token: 'd'.repeat(64) })
+  const create = {
+    type: 'save-entry',
+    scope: null,
+    base: null,
+    baseToken: null,
+    intended,
+    patch: { note: intended.note },
+    draft: { note: intended.note },
+    argv: ['time', 'create', '--note', intended.note]
+  }
+  let result = unknown(inFlight(initial([baseline]), create).state)
+  const applied = entry('11', { token: 'e'.repeat(64) })
+  result = Ledger.apply(result.state, {
+    type: 'observation',
+    records: [applied],
+    complete: true,
+    includesDeleted: true,
+    causalTag: 'cause-2'
+  })
+  const durable = Store.deserialize(Store.serialize({
+    schemaVersion: result.state.schemaVersion,
+    operations: result.state.operations,
+    records: result.state.records
+  }))
+  assert.equal(durable.recoveryError, null)
+  result = Ledger.apply(Ledger.restore(durable.snapshot), { type: 'startup' })
+  result = reconcile(result.state, 'operation-1', [baseline, applied])
+  assert.equal(result.state.operations[0].state, 'settled')
+  assert.equal(result.state.records['time-entry:11'].id, '11')
+})
+
 test('timer transition reconciliation uses logical semantics', () => {
   const base = activeTimer()
   const intended = activeTimer({

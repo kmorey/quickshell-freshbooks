@@ -8,7 +8,7 @@ var LOCKING_STATES = ["prepared", "in-flight", "rebasing", "conflicted", "unknow
 var OPERATION_KEYS = [
   "operationId", "kind", "contractVersion", "scope", "state", "base",
   "baseToken", "expectedToken", "patch", "intended", "projection", "draft",
-  "causalTag", "request", "receipt", "lineage"
+  "causalTag", "request", "receipt", "lineage", "creationBaseline"
 ]
 var REQUIRED_OPERATION_KEYS = [
   "operationId", "kind", "contractVersion", "scope", "state", "base",
@@ -206,6 +206,16 @@ function sanitizeReceipt(receipt) {
   return result
 }
 
+function sanitizeCreationBaseline(value) {
+  if (!isObject(value)) return {}
+  var result = copyKeys(value, ["queryKey", "coverage", "identities"])
+  result.coverage = copyKeys(result.coverage, [
+    "kind", "identity", "from", "to", "complete", "includesDeleted"
+  ])
+  if (Array.isArray(result.identities)) result.identities = result.identities.slice()
+  return result
+}
+
 function sanitizeOperation(operation) {
   var result = copyKeys(operation, OPERATION_KEYS)
   result.base = sanitizeRecord(result.base)
@@ -215,6 +225,8 @@ function sanitizeOperation(operation) {
   result.draft = result.draft === null ? null : sanitizeSemanticObject(result.draft, DRAFT_KEYS)
   result.request = sanitizeRequest(result.request)
   result.receipt = sanitizeReceipt(result.receipt)
+  if (result.creationBaseline !== undefined)
+    result.creationBaseline = sanitizeCreationBaseline(result.creationBaseline)
   return result
 }
 
@@ -382,9 +394,33 @@ function validScope(scope, operationId) {
   return match !== null && match[1] === operationId
 }
 
+function validCreationBaseline(value) {
+  if (!hasOnly(value, ["queryKey", "coverage", "identities"]) || !isId(value.queryKey)
+      || !hasOnly(value.coverage, [
+        "kind", "identity", "from", "to", "complete", "includesDeleted"
+      ]) || (value.coverage.kind !== "time-entry" && value.coverage.kind !== "active-timer")
+      || !(value.coverage.identity === null
+        || isString(value.coverage.identity)
+          && value.coverage.identity.indexOf(value.coverage.kind + ":") === 0)
+      || !(value.coverage.from === null || isDate(value.coverage.from))
+      || !(value.coverage.to === null || isDate(value.coverage.to))
+      || value.coverage.complete !== true || value.coverage.includesDeleted !== true
+      || !Array.isArray(value.identities)) return false
+  var seen = {}
+  for (var i = 0; i < value.identities.length; i++) {
+    var identity = value.identities[i]
+    if (!isString(identity)
+        || identity.indexOf(value.coverage.kind + ":") !== 0 || seen[identity]) return false
+    seen[identity] = true
+  }
+  return true
+}
+
 function validOperation(operation) {
   if (!isObject(operation)
-      || !hasRequiredAndOptional(operation, REQUIRED_OPERATION_KEYS, ["expectedToken"])
+      || !hasRequiredAndOptional(operation, REQUIRED_OPERATION_KEYS, [
+        "expectedToken", "creationBaseline"
+      ])
       || !/^operation-\d+$/.test(operation.operationId) || !isId(operation.kind)
       || operation.contractVersion !== 2 || !validScope(operation.scope, operation.operationId)
       || OPERATION_STATES.indexOf(operation.state) === -1
@@ -394,6 +430,8 @@ function validOperation(operation) {
       || !validPatch(operation.patch) || !(operation.intended === null || validRecord(operation.intended))
       || !validRequest(operation.request) || !isId(operation.causalTag)
       || !(operation.lineage === null || isId(operation.lineage))) return false
+  if (operation.creationBaseline !== undefined
+      && !validCreationBaseline(operation.creationBaseline)) return false
   if (operation.state === "settled")
     return operation.draft === null && operation.projection === null
       && validReceipt(operation.receipt, operation)
