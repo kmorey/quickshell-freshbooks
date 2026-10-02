@@ -403,6 +403,21 @@ function parseDurationInput(value) {
   return hours * 3600 + minutes * 60 + seconds
 }
 
+function entryFormChanged(form, original) {
+  var current = form && typeof form === "object" ? form : {}
+  var base = original && typeof original === "object" ? original : {}
+  var duration = current.durationText === undefined
+    ? integerSeconds(current.durationSeconds)
+    : parseDurationInput(current.durationText)
+  return String(current.note || "") !== String(base.note || "")
+    || duration !== integerSeconds(base.durationSeconds)
+    || String(current.localDate || "") !== String(base.localDate || "")
+    || String(current.projectId === undefined || current.projectId === null ? "" : current.projectId)
+      !== String(base.projectId === undefined || base.projectId === null ? "" : base.projectId)
+    || String(current.serviceId === undefined || current.serviceId === null ? "" : current.serviceId)
+      !== String(base.serviceId === undefined || base.serviceId === null ? "" : base.serviceId)
+}
+
 function entryUpdateFields(draft, dirtyGroups) {
   var values = draft && typeof draft === "object" ? draft : {}
   var dirty = dirtyGroups && typeof dirtyGroups === "object" ? dirtyGroups : {}
@@ -548,6 +563,7 @@ if (typeof module !== "undefined") module.exports = {
   dateKey: dateKey,
   elapsedSeconds: elapsedSeconds,
   entryDateKey: entryDateKey,
+  entryFormChanged: entryFormChanged,
   entryUpdateFields: entryUpdateFields,
   formatDuration: formatDuration,
   formatHoursMinutes: formatHoursMinutes,

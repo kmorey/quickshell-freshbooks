@@ -76,6 +76,20 @@ Panel {
   property bool entryDateDirty: false
   property bool entryAssignmentDirty: false
   readonly property bool entryHasDirtyFields: entryNoteDirty || entryDurationDirty || entryDateDirty || entryAssignmentDirty
+  readonly property bool entryFormChanged: entryEditorMode === "edit"
+    && Model.entryFormChanged({
+      note: entryNoteField.text,
+      durationText: entryDurationField.text,
+      localDate: entryDateField.text,
+      projectId: entryProjectId,
+      serviceId: entryServiceId
+    }, {
+      note: entryOriginalNote,
+      durationSeconds: entryOriginalDurationSeconds,
+      localDate: entryOriginalDateKey,
+      projectId: entryOriginalProjectId,
+      serviceId: entryOriginalServiceId
+    })
   property bool confirmingDelete: false
   onEntryEditorModeChanged: {
     if (entryEditorMode === "closed") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -1424,7 +1438,7 @@ Panel {
                 objectName: "freshbooksEntrySaveTarget"
                 label: "Save"
                 enabled: (root.entryEditorMode === "create"
-                    || (root.entryHasDirtyFields && root.canMutateScope("time-entry:" + root.editingEntryId)))
+                    || (root.entryFormChanged && root.canMutateScope("time-entry:" + root.editingEntryId)))
                   && Model.parseDurationInput(entryDurationField.text) !== null
                   && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
                 onTriggered: root.saveEntry()

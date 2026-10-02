@@ -216,6 +216,25 @@ test('builds entry update fields only for dirty field groups', () => {
     serviceId: '66'
   })
 })
+test('detects a duration-only calendar entry edit from current form values', () => {
+  const original = {
+    localDate: '2026-09-03',
+    durationSeconds: 3600,
+    projectId: '44',
+    serviceId: '66',
+    note: 'Planning'
+  }
+
+  assert.equal(model.entryFormChanged({
+    ...original,
+    durationText: '01:30:00'
+  }, original), true)
+  assert.equal(model.entryFormChanged({
+    ...original,
+    durationText: '01:00:00'
+  }, original), false)
+})
+
 
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('10:00'), 36000)
