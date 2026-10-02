@@ -6,23 +6,42 @@ Item {
 
   property var script: []
   property var requests: []
-  readonly property bool busy: false
+  property var modelState: FakeCliModel.initialState(script)
+  property bool autoStart: true
+  readonly property bool busy: modelState.active !== null
 
-  signal succeeded(string requestId, var data)
-  signal failed(string requestId, var error)
+  signal completed(var completion)
 
-  function execute(requestId, request) {
+  onScriptChanged: if (!busy && modelState.pending.length === 0)
+    modelState = FakeCliModel.initialState(script)
+
+  function execute(request) {
     var seen = requests.slice()
     seen.push(request)
     requests = seen
-
-    var consumed = FakeCliModel.consume(script, request)
-    script = consumed.remaining
-    Qt.callLater(function() {
-      if (consumed.result.ok) root.succeeded(requestId, consumed.result.data)
-      else root.failed(requestId, consumed.result.error)
-    })
+    var transition = FakeCliModel.enqueue(modelState, request)
+    modelState = transition.state
+    if (autoStart) startNext()
+    return true
   }
 
-  function cancel() {}
+  function startNext() {
+    var transition = FakeCliModel.startNext(modelState)
+    modelState = transition.state
+    if (!transition.started) return false
+    Qt.callLater(function() {
+      var finished = FakeCliModel.completeActive(root.modelState)
+      root.modelState = finished.state
+      root.script = finished.state.script
+      if (finished.completion) root.completed(finished.completion)
+      if (root.autoStart) root.startNext()
+    })
+    return true
+  }
+
+  function cancelRead(requestId) {
+    var transition = FakeCliModel.cancelRead(modelState, requestId)
+    modelState = transition.state
+    return transition.canceled
+  }
 }

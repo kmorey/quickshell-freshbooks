@@ -1,174 +1,214 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import "TimeTrackingModel.js" as Model
+import "OperationLedger.js" as Ledger
+import "RequestCoordinator.js" as Coordinator
+import "ServiceRuntime.js" as ServiceRuntime
 
 Item {
   id: root
-
-  property alias draftTimerId: stateData.timerId
-  property alias draftTimerNote: stateData.timerNote
-  property alias draftTimerDuration: stateData.timerDuration
-  property alias draftTimerSnapshotToken: stateData.timerSnapshotToken
-  property alias draftTimerNoteDirty: stateData.timerNoteDirty
-  property alias draftTimerDurationDirty: stateData.timerDurationDirty
-  property alias entryDraft: stateData.entryDraft
 
   property var shell: null
   property var manifest: null
   property var pluginRegistry: null
   property var barWidgetRegistry: null
   property string omarchyPath: ""
-
-  // The adapter is the single external seam. Tests and prototypes replace it
-  // with FakeCliAdapter without changing any timer state or intent code.
   property var cliAdapter: productionCli
-  property var timers: []
-  property var projects: []
-  property var entries: []
-  property var recentEntries: []
+
+  property var view: runtime.getView()
   property var diagnostics: ({})
+  property var projects: []
   property var businesses: []
   property string authorizationUrl: ""
   property string selectedTimerId: ""
   property string phase: "starting"
   property string lastErrorCode: ""
   property string lastError: ""
-  property bool outcomeUnknown: false
-  property bool snapshotStale: true
-  property bool conflictPending: false
   property double lastRefreshMs: 0
   property var visibleConsumers: ({})
   property string lastEntryFrom: ""
   property string lastEntryTo: ""
 
+  property string draftTimerId: ""
+  property string draftTimerNote: ""
+  property string draftTimerDuration: ""
+  property bool draftTimerNoteDirty: false
+  property bool draftTimerDurationDirty: false
+  property var entryDraft: ({})
+
+  readonly property var recordList: {
+    var records = view && view.records ? view.records : {}
+    var values = []
+    var scopes = Object.keys(records)
+    for (var i = 0; i < scopes.length; i++) {
+      var record = records[scopes[i]]
+      if (record && record.exists !== false) values.push(record)
+    }
+    return values
+  }
+  readonly property var timers: recordList.filter(function(record) { return record.kind === "active-timer" })
+  readonly property var entries: recordList.filter(function(record) { return record.kind === "time-entry" })
+  readonly property var recentEntries: entries
   readonly property string timerMode: Model.timerMode(timers)
-  readonly property var activeTimer: _optimisticTimerActive ? _optimisticTimer : Model.selectedTimer(timers, selectedTimerId)
+  readonly property var activeTimer: Model.selectedTimer(timers, selectedTimerId)
   readonly property var state: Model.stateProjection({ timers: timers, projects: projects, entries: entries }, selectedTimerId)
-  readonly property bool busy: _current !== null
-  readonly property var pendingRequest: interactiveRequest()
-  readonly property bool mutationPending: pendingRequest !== null
-  readonly property string pendingIntent: pendingRequest ? String(pendingRequest.intent || "") : ""
-  readonly property var pendingPayload: pendingRequest ? (pendingRequest.payload || {}) : ({})
-  readonly property bool refreshing: refreshRequestPending()
+  readonly property bool mutationPending: {
+    var operations = view && Array.isArray(view.operations) ? view.operations : []
+    for (var i = 0; i < operations.length; i++)
+      if (["prepared", "in-flight", "rebasing", "unknown"].indexOf(operations[i].state) !== -1) return true
+    return false
+  }
+  readonly property bool busy: mutationPending || (cliAdapter && cliAdapter.busy === true)
+  readonly property string pendingIntent: {
+    var operations = view && Array.isArray(view.operations) ? view.operations : []
+    for (var i = operations.length - 1; i >= 0; i--)
+      if (["prepared", "in-flight", "rebasing", "unknown"].indexOf(operations[i].state) !== -1)
+        return String(operations[i].kind || "")
+    return ""
+  }
+  readonly property var pendingPayload: ({})
+  readonly property bool refreshing: cliAdapter && cliAdapter.busy === true && !mutationPending
   readonly property bool hasVisibleConsumers: Object.keys(visibleConsumers).length > 0
   readonly property bool diagnosticsReady: diagnosticsCompatible(diagnostics)
 
-  property var _queue: []
-  property var _current: null
-  property int _requestSerial: 0
-  property bool _refreshQueued: false
-  property var _conflictRequest: null
-  property bool _draftConflict: false
-  property bool _projectsConfirmed: false
-  property bool _recentConfirmed: false
-  property string _unknownRefreshIntent: ""
-  property var _unknownRequest: null
-  property string _unknownRefreshFrom: ""
-  property string _unknownRefreshTo: ""
-  property string _unknownOriginalFrom: ""
-  property string _unknownOriginalTo: ""
-  property bool _draftFileReady: false
-  property bool _draftResetPending: false
-  property bool _fullRefreshRequested: false
-  property bool _optimisticTimerActive: false
-  property var _optimisticTimer: null
-  property var _pendingCreatedEntryReconciliations: []
-
-  function saveEntryDraft(draft) {
-    var next = draft || ({})
-    var current = entryDraft || {}
-    var currentMode = String(current.mode || "")
-    var nextMode = String(next.mode || "")
-    var currentId = String(current.entryId || (currentMode !== "edit" && currentMode !== "create" && currentMode !== "new" ? currentMode : ""))
-    var nextId = String(next.entryId || (nextMode !== "edit" && nextMode !== "create" && nextMode !== "new" ? nextMode : ""))
-    if (current.dirty === true && next.dirty === true && currentMode !== "create" && currentMode !== "new"
-        && nextMode !== "create" && nextMode !== "new" && currentId !== "" && currentId === nextId
-        && String(current.snapshotToken || "") !== ""
-        && String(next.snapshotToken || "") !== String(current.snapshotToken || "")) {
-      var preserved = {}
-      for (var key in next) preserved[key] = next[key]
-      preserved.snapshotToken = String(current.snapshotToken)
-      next = preserved
+  property var runtime: ServiceRuntime.createServiceRuntime({
+    Ledger: Ledger,
+    Coordinator: Coordinator,
+    budgets: {
+      read: 64000,
+      "single-write": 128000,
+      "multi-segment": 320000,
+      log: 192000,
+      switch: 320000
     }
-    stateData.entryDraft = next
-  }
-  function diagnosticsCompatible(value) {
-    var data = value || {}
-    var parts = String(data.version || "").split(".")
-    if (Number(parts[0] || 0) !== 0 || Number(parts[1] || 0) < 2) return false
-    if (!Array.isArray(data.capabilities)) return false
-    var required = ["projects", "time-entries", "timer-segments", "timer-switch", "snapshot-guards", "local-calendar", "bounded-history", "popup-onboarding"]
-    for (var i = 0; i < required.length; i++) if (data.capabilities.indexOf(required[i]) === -1) return false
-    return true
-  }
-  function clearEntryDraft() { stateData.entryDraft = ({}) }
-  function clearTimerDraft() {
-    stateData.timerId = ""
-    stateData.timerNote = ""
-    stateData.timerDuration = ""
-    stateData.timerSnapshotToken = ""
-    stateData.timerNoteDirty = false
-    stateData.timerDurationDirty = false
-  }
-  function clearTimerNoteDraft() {
-    stateData.timerNote = ""
-    stateData.timerNoteDirty = false
-  }
-  function clearTimerDurationDraft() {
-    stateData.timerDuration = ""
-    stateData.timerDurationDirty = false
+  })
+
+  function publishView() {
+    view = runtime.getView()
+    var errors = view && Array.isArray(view.errors) ? view.errors : []
+    if (errors.length > 0) {
+      var latest = errors[errors.length - 1]
+      lastErrorCode = String(latest.code || "")
+      lastError = String(latest.message || "")
+      phase = "error"
+    } else if (view && Array.isArray(view.conflicts) && view.conflicts.length > 0) {
+      phase = "conflict"
+    } else if (diagnosticsReady) {
+      phase = timerMode === "multiple" ? "ambiguous" : "ready"
+    }
   }
 
-  function setupReady() {
-    return diagnosticsReady
-      && diagnostics.configured === true
-      && diagnostics.authenticated === true
-      && diagnostics.businessSelected === true
+
+  function flushActions() {
+    var pending = runtime.takeActions()
+    while (pending.length > 0) {
+      for (var i = 0; i < pending.length; i++) {
+        var action = pending[i]
+        if (action.type === "persist") ledgerStore.save(action.snapshot, action.transactionId)
+        else if (action.type === "start") {
+          if (cliAdapter && cliAdapter.execute(action.request) !== false)
+            runtime.adapterStarted(action.request.requestId)
+        } else if (action.type === "cancel-read" && cliAdapter) cliAdapter.cancelRead(action.requestId)
+      }
+      pending = runtime.takeActions()
+    }
+    publishView()
   }
 
-  function withSnapshot(argv, record) {
+  function submitIntent(intent) {
+    var accepted = runtime.submitIntent(intent)
+    publishView()
+    flushActions()
+    return accepted
+  }
+
+  function recordScope(record) {
+    return record ? String(record.kind || "") + ":" + String(record.id || "") : ""
+  }
+
+  function withGuard(argv, record) {
     var result = argv.slice()
-    if (record && String(record.snapshotToken || "") !== "") result.push("--snapshot", String(record.snapshotToken))
+    if (record && String(record.token || "") !== "") result.push("--guard", String(record.token))
     return result
   }
 
-  function requestIsInteractive(request) {
-    if (!request) return false
-    return request.mutation === true || String(request.intent || "") === "prepareCreateEntry"
+  function cloneRecord(record) {
+    var copy = {}
+    var keys = Object.keys(record || {})
+    for (var i = 0; i < keys.length; i++) copy[keys[i]] = record[keys[i]]
+    return copy
   }
 
-  function interactiveRequest() {
-    if (requestIsInteractive(_current)) return _current
-    for (var i = 0; i < _queue.length; i++) if (requestIsInteractive(_queue[i])) return _queue[i]
-    return null
+  function submitRead(queryKey, argv, coverage, requestKind) {
+    return submitIntent({
+      type: "refresh",
+      requestKind: requestKind || "quiet-read",
+      queryKey: queryKey,
+      coverage: coverage || null,
+      argv: argv,
+      commandClass: "read"
+    })
   }
 
-  function refreshRequestPending() {
-    if (_current && !requestIsInteractive(_current)) return true
-    for (var i = 0; i < _queue.length; i++) if (!requestIsInteractive(_queue[i])) return true
-    return false
+  function refresh() {
+    if (!setupReady()) return false
+    lastRefreshMs = Date.now()
+    return submitRead("active-timer", ["timer", "status"], {
+      kind: "active-timer", identity: null, from: null, to: null,
+      complete: true, includesDeleted: true
+    }, "quiet-read")
   }
 
-  function requestPending(intent) {
-    var target = String(intent || "")
-    if (_current && String(_current.intent || "") === target) return true
-    for (var i = 0; i < _queue.length; i++) if (String(_queue[i].intent || "") === target) return true
-    return false
+  function refreshEntries(fromDate, toDate) {
+    lastEntryFrom = String(fromDate || lastEntryFrom || "")
+    lastEntryTo = String(toDate || lastEntryTo || "")
+    var argv = ["time", "list"]
+    if (lastEntryFrom !== "") argv.push("--from", lastEntryFrom)
+    if (lastEntryTo !== "") argv.push("--to", lastEntryTo)
+    return submitRead("time-entries:" + lastEntryFrom + ":" + lastEntryTo, argv, {
+      kind: "time-entry", identity: null, from: lastEntryFrom || null, to: lastEntryTo || null,
+      complete: true, includesDeleted: true
+    }, "visible-read")
   }
 
-  function applyOptimisticTimer(intent, payload) {
-    _optimisticTimer = Model.optimisticTimer(activeTimer, intent, payload || {}, Date.now())
-    _optimisticTimerActive = true
+  function refreshRecentEntries() {
+    return submitRead("recent-time-entries", ["time", "list", "--limit", "200"], {
+      kind: "time-entry", identity: null, from: null, to: null,
+      complete: false, includesDeleted: false
+    }, "quiet-read")
   }
 
-  function clearOptimisticTimer() {
-    _optimisticTimerActive = false
-    _optimisticTimer = null
+  function refreshProjects() { return submitRead("projects", ["projects", "list"], null, "quiet-read") }
+  function refreshBusinesses() { return submitRead("businesses", ["business", "list"], null, "quiet-read") }
+  function refreshDiagnostics() { return submitRead("diagnostics", ["diagnostics", "status"], null, "quiet-read") }
+
+  function refreshView(target, fromDate, toDate) {
+    if (target === "entries") return refreshEntries(fromDate, toDate)
+    if (target === "projects") return refreshProjects()
+    return refresh()
+  }
+
+  function refreshAll(fromDate, toDate) {
+    refresh()
+    refreshProjects()
+    refreshRecentEntries()
+    if (fromDate || toDate) refreshEntries(fromDate, toDate)
+  }
+
+  function setupReady() {
+    return diagnosticsReady && diagnostics.configured === true
+      && diagnostics.authenticated === true && diagnostics.businessSelected === true
+  }
+
+  function diagnosticsCompatible(value) {
+    var data = value || {}
+    var parts = String(data.version || "").split(".")
+    return Number(parts[0] || 0) === 0 && Number(parts[1] || 0) >= 3
+      && Number(data.canonicalContractVersion || 0) === 2
   }
 
   function useAdapter(adapter) {
-    if (_current !== null) return false
+    if (busy) return false
     cliAdapter = adapter || productionCli
     return true
   }
@@ -177,7 +217,8 @@ Item {
     var id = String(consumerId || "")
     if (id === "") return
     var next = {}
-    for (var key in visibleConsumers) next[key] = visibleConsumers[key]
+    var keys = Object.keys(visibleConsumers)
+    for (var i = 0; i < keys.length; i++) next[keys[i]] = true
     next[id] = true
     visibleConsumers = next
     refresh()
@@ -186,7 +227,8 @@ Item {
   function unregisterVisibleConsumer(consumerId) {
     var id = String(consumerId || "")
     var next = {}
-    for (var key in visibleConsumers) if (key !== id) next[key] = visibleConsumers[key]
+    var keys = Object.keys(visibleConsumers)
+    for (var i = 0; i < keys.length; i++) if (keys[i] !== id) next[keys[i]] = true
     visibleConsumers = next
   }
 
@@ -195,889 +237,177 @@ Item {
     selectedTimerId = selected ? String(selected.id) : ""
   }
 
-  function clearError() {
-    lastErrorCode = ""
-    lastError = ""
-    outcomeUnknown = false
-    _unknownRefreshIntent = ""
-    _unknownRequest = null
-    _unknownRefreshFrom = ""
-    _unknownRefreshTo = ""
+  function clearError() { lastErrorCode = ""; lastError = ""; publishView() }
+  function saveEntryDraft(draft) { entryDraft = draft || ({}) }
+  function clearEntryDraft() { entryDraft = ({}) }
+  function clearTimerDraft() {
+    draftTimerId = ""; draftTimerNote = ""; draftTimerDuration = ""
+    draftTimerNoteDirty = false; draftTimerDurationDirty = false
   }
+  function clearTimerNoteDraft() { draftTimerNote = ""; draftTimerNoteDirty = false }
+  function clearTimerDurationDraft() { draftTimerDuration = ""; draftTimerDurationDirty = false }
 
-  function refresh() {
-    if (!setupReady()) return
-    if (_refreshQueued || (_current && _current.intent === "refreshTimers")) return
-    _refreshQueued = true
-    enqueue("refreshTimers", ["timer", "status"], {}, false)
-  }
+  function saveEntry(intent) { return submitIntent(intent) }
 
-  function refreshProjects() {
-    if (requestPending("refreshProjects")) return false
-    enqueue("refreshProjects", ["projects", "list"], {}, false)
-  }
-
-  function refreshEntries(fromDate, toDate) {
-    lastEntryFrom = String(fromDate || lastEntryFrom || "")
-    lastEntryTo = String(toDate || lastEntryTo || "")
-    var pendingCreations = _pendingCreatedEntryReconciliations.slice()
-    if (_current && String(_current.intent || "") === "refreshEntries"
-        && String((_current.payload || {}).fromDate || "") === lastEntryFrom
-        && String((_current.payload || {}).toDate || "") === lastEntryTo
-        && pendingCreations.length === 0) return false
-    for (var i = 0; i < _queue.length; i++) {
-      var queued = _queue[i]
-      if (String(queued.intent || "") === "refreshEntries"
-          && String((queued.payload || {}).fromDate || "") === lastEntryFrom
-          && String((queued.payload || {}).toDate || "") === lastEntryTo) {
-        if (pendingCreations.length > 0) {
-          queued.payload.createdEntryReconciliations = mergeCreatedEntryReconciliations(
-            queued.payload.createdEntryReconciliations, pendingCreations)
-          _pendingCreatedEntryReconciliations = []
-        }
-        return false
-      }
+  function createEntry(fields) {
+    var values = fields || {}
+    var intended = {
+      contractVersion: 2, kind: "time-entry", id: "provisional", exists: true,
+      localDate: String(values.localDate || values.date || ""), startedAt: String(values.startedAt || ""),
+      durationSeconds: Number(values.durationSeconds || 0), projectId: values.projectId || null,
+      clientId: values.clientId || null, serviceId: values.serviceId || null, note: String(values.note || ""),
+      billable: values.billable === true, billed: false,
+      token: "0000000000000000000000000000000000000000000000000000000000000000"
     }
-    var retained = []
-    var carriedCreations = pendingCreations
-    for (var j = 0; j < _queue.length; j++) {
-      var candidate = _queue[j] || {}
-      if (String(candidate.intent || "") === "refreshEntries")
-        carriedCreations = mergeCreatedEntryReconciliations(
-          carriedCreations, (candidate.payload || {}).createdEntryReconciliations)
-      else retained.push(candidate)
+    var argv = ["time", "add", "--date", intended.localDate, "--duration", String(intended.durationSeconds), "--project", String(intended.projectId)]
+    if (intended.serviceId !== null) argv.push("--service", String(intended.serviceId))
+    if (intended.note !== "") argv.push("--note", intended.note)
+    return saveEntry({ type: "save-entry", scope: null, base: null, baseToken: null,
+      intended: intended, patch: values, draft: values, argv: argv, commandClass: "single-write" })
+  }
+
+  function updateEntry(entryId, fields) {
+    var scope = "time-entry:" + String(entryId)
+    var base = view.records[scope]
+    if (!base) return false
+    var values = fields || {}
+    var patch = {}
+    if (values.note !== undefined) patch.note = String(values.note)
+    if (values.durationSeconds !== undefined) patch.duration = Number(values.durationSeconds)
+    if (values.localDate !== undefined) patch.date = { localDate: String(values.localDate) }
+    if (values.projectId !== undefined || values.serviceId !== undefined) patch.assignment = {
+      projectId: values.projectId, serviceId: values.serviceId
     }
-    _queue = retained
-    _pendingCreatedEntryReconciliations = []
-    var argv = ["time", "list"]
-    if (lastEntryFrom !== "") argv.push("--from", lastEntryFrom)
-    if (lastEntryTo !== "") argv.push("--to", lastEntryTo)
-    enqueue("refreshEntries", argv, {
-      fromDate: lastEntryFrom,
-      toDate: lastEntryTo,
-      createdEntryReconciliations: carriedCreations
-    }, false)
+    var argv = withGuard(["time", "update", String(entryId)], base)
+    return saveEntry({ type: "save-entry", scope: scope, base: base, baseToken: base.token,
+      patch: patch, draft: values, argv: argv, commandClass: "single-write" })
   }
 
-  function refreshRecentEntries() {
-    if (requestPending("refreshRecentEntries")) return false
-    enqueue("refreshRecentEntries", ["time", "list", "--limit", "200"], {}, false)
-  }
-
-  function refreshView(view, fromDate, toDate) {
-    lastEntryFrom = String(fromDate || lastEntryFrom || "")
-    lastEntryTo = String(toDate || lastEntryTo || "")
-    if (!setupReady()) {
-      refreshDiagnostics()
-      return
-    }
-    refresh()
-    var target = String(view || "timer")
-    if (projects.length === 0) refreshProjects()
-    if (target === "projects") {
-      refreshProjects()
-      refreshRecentEntries()
-    } else if (target === "calendar") {
-      refreshEntries(lastEntryFrom, lastEntryTo)
-    }
-  }
-
-  function refreshAll(fromDate, toDate) {
-    lastEntryFrom = String(fromDate || lastEntryFrom || "")
-    lastEntryTo = String(toDate || lastEntryTo || "")
-    if (setupReady()) {
-      _fullRefreshRequested = false
-      refreshOperationalData()
-      return
-    }
-    _fullRefreshRequested = true
-    refreshDiagnostics()
-  }
-
-  function refreshOperationalData() {
-    refresh()
-    refreshProjects()
-    refreshRecentEntries()
-    refreshEntries(lastEntryFrom, lastEntryTo)
-  }
-
-  function refreshDiagnostics() {
-    if (requestPending("refreshDiagnostics")) return false
-    enqueue("refreshDiagnostics", ["diagnostics", "status"], {}, false)
-  }
-
-  function configureAuth(clientId, clientSecret, redirectUri) {
-    if (String(clientId || "") === "" || String(clientSecret || "") === "" || String(redirectUri || "") === "") return false
-    authorizationUrl = ""
-    return enqueue("configureAuth", [
-      "auth", "configure",
-      "--client-id", String(clientId),
-      "--redirect-uri", String(redirectUri),
-      "--client-secret-stdin"
-    ], {}, false, String(clientSecret))
-  }
-
-  function requestAuthorizationUrl() {
-    authorizationUrl = ""
-    return enqueue("requestAuthorizationUrl", ["auth", "url"], {}, false)
-  }
-
-  function completeAuthentication(codeOrUrl) {
-    if (String(codeOrUrl || "") === "") return false
-    return enqueue("completeAuthentication", ["auth", "login", "--code-stdin"], {}, false, String(codeOrUrl))
-  }
-
-  function refreshBusinesses() {
-    return enqueue("refreshBusinesses", ["business", "list"], {}, false)
-  }
-
-  function selectBusiness(businessId) {
-    if (String(businessId || "") === "") return false
-    return enqueue("selectBusiness", ["business", "use", String(businessId)], {}, false)
-  }
-
-  function retryUnknownRefresh() {
-    if (!outcomeUnknown) return false
-    if (_unknownRefreshIntent === "refreshEntries") {
-      var argv = ["time", "list"]
-      if (_unknownRefreshFrom !== "") argv.push("--from", _unknownRefreshFrom)
-      if (_unknownRefreshTo !== "") argv.push("--to", _unknownRefreshTo)
-      return enqueueNext("refreshEntries", argv, { fromDate: _unknownRefreshFrom, toDate: _unknownRefreshTo }, false)
-    }
-    if (_unknownRefreshIntent === "refreshTimers") {
-      refresh()
-      return true
-    }
-    return false
+  function deleteEntry(entryId) {
+    var scope = "time-entry:" + String(entryId)
+    var base = view.records[scope]
+    if (!base) return false
+    return saveEntry({ type: "save-entry", scope: scope, base: base, baseToken: base.token,
+      intended: { contractVersion: 2, kind: "time-entry", id: String(entryId), exists: false, token: null },
+      patch: { "timer-state": { state: "deleted" } }, draft: {},
+      argv: withGuard(["time", "delete", String(entryId), "--yes"], base), commandClass: "single-write" })
   }
 
   function start(projectId, serviceId, note) {
-    var argv = ["timer", "start", "--project", String(projectId)]
-    if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
-    if (String(note || "") !== "") argv.push("--note", String(note))
-    var payload = { projectId: projectId, serviceId: serviceId, note: String(note || "") }
-    if (enqueue("start", argv, payload, true)) applyOptimisticTimer("start", payload)
+    var now = new Date().toISOString()
+    var intended = {
+      contractVersion: 2, kind: "active-timer", id: "provisional", exists: true,
+      segments: [], state: "running", elapsedAnchor: { closedSeconds: 0, runningStartedAt: now, observedAt: now },
+      projectId: String(projectId), clientId: null, serviceId: serviceId === undefined ? null : String(serviceId),
+      note: String(note || ""), billable: false,
+      token: "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+    var argv = ["timer", "start", "--project", intended.projectId]
+    if (intended.serviceId !== null) argv.push("--service", intended.serviceId)
+    if (intended.note !== "") argv.push("--note", intended.note)
+    return submitIntent({ type: "start", scope: null, base: null, intended: intended,
+      patch: { "timer-state": { state: "running" } }, draft: intended, argv: argv, commandClass: "multi-segment" })
   }
 
-  function pause() {
-    if (!activeTimer) return
-    var payload = { timerId: activeTimer.id }
-    if (enqueue("pause", withSnapshot(["timer", "pause", "--id", String(activeTimer.id)], activeTimer), payload, true))
-      applyOptimisticTimer("pause", payload)
+  function timerIntent(type, patch, argv, commandClass) {
+    if (!activeTimer) return false
+    return submitIntent({ type: type, scope: recordScope(activeTimer), base: activeTimer, baseToken: activeTimer.token,
+      patch: patch, draft: patch, argv: withGuard(argv, activeTimer), commandClass: commandClass || "multi-segment" })
   }
 
-  function resume() {
-    if (!activeTimer) return
-    var payload = { timerId: activeTimer.id }
-    if (enqueue("resume", withSnapshot(["timer", "resume", "--id", String(activeTimer.id)], activeTimer), payload, true))
-      applyOptimisticTimer("resume", payload)
-  }
-
-  function correctDuration(seconds) {
-    if (!activeTimer) return
-    var duration = Math.max(0, Math.round(Number(seconds) || 0))
-    var payload = { timerId: activeTimer.id, durationSeconds: duration }
-    if (enqueue("correctDuration", withSnapshot(["timer", "correct", "--id", String(activeTimer.id), "--duration", String(duration)], activeTimer), payload, true))
-      applyOptimisticTimer("correctDuration", payload)
-  }
-
-  function updateTimerNote(note) {
-    if (!activeTimer) return
-    var payload = { timerId: activeTimer.id, note: String(note || "") }
-    if (enqueue("updateTimerNote", withSnapshot(["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")], activeTimer), payload, true))
-      applyOptimisticTimer("updateTimerNote", payload)
-  }
-
-  function logTimer() {
-    if (!activeTimer) return
-    var payload = { timerId: activeTimer.id }
-    if (enqueue("log", withSnapshot(["timer", "log", "--id", String(activeTimer.id)], activeTimer), payload, true))
-      applyOptimisticTimer("log", payload)
-  }
+  function pause() { return activeTimer && timerIntent("pause", { "timer-state": { state: "paused" } }, ["timer", "pause", "--id", String(activeTimer.id)]) }
+  function resume() { return activeTimer && timerIntent("resume", { "timer-state": { state: "running" } }, ["timer", "resume", "--id", String(activeTimer.id)]) }
+  function correctDuration(seconds) { return activeTimer && timerIntent("correct-duration", { duration: Number(seconds) }, ["timer", "correct", "--id", String(activeTimer.id), "--duration", String(seconds)]) }
+  function updateNote(note) { return activeTimer && timerIntent("update-note", { note: String(note || "") }, ["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")]) }
+  function updateTimerNote(note) { return updateNote(note) }
+  function log() { return activeTimer && timerIntent("log", { "timer-state": { state: "logged" } }, ["timer", "log", "--id", String(activeTimer.id)], "log") }
+  function logTimer() { return log() }
+  function discard() { return activeTimer && timerIntent("discard", { "timer-state": { state: "deleted" } }, ["timer", "discard", "--id", String(activeTimer.id)]) }
 
   function switchTimer(projectId, serviceId, note) {
-    if (timerMode === "multiple" || (timerMode === "single" && !activeTimer)) return
-    var argv = ["timer", "switch", "--project", String(projectId)]
-    if (serviceId !== undefined && serviceId !== null) argv.push("--service", String(serviceId))
-    if (String(note || "") !== "") argv.push("--note", String(note))
-    if (activeTimer) argv.push("--id", String(activeTimer.id))
-    argv = withSnapshot(argv, activeTimer)
-    var payload = { timerId: activeTimer ? activeTimer.id : "", projectId: projectId, serviceId: serviceId, note: String(note || "") }
-    if (enqueue("switch", argv, payload, true)) applyOptimisticTimer("switch", payload)
+    if (!activeTimer) return start(projectId, serviceId, note)
+    var intended = cloneRecord(activeTimer)
+    intended.id = "provisional"
+    intended.projectId = String(projectId)
+    intended.serviceId = serviceId === undefined ? null : String(serviceId)
+    intended.note = String(note || "")
+    var argv = ["timer", "switch", "--project", intended.projectId]
+    if (intended.serviceId !== null) argv.push("--service", intended.serviceId)
+    if (intended.note !== "") argv.push("--note", intended.note)
+    return submitIntent({ type: "switch", scope: null, base: activeTimer, baseToken: activeTimer.token,
+      intended: intended, patch: { assignment: { projectId: intended.projectId, serviceId: intended.serviceId }, note: intended.note },
+      draft: intended, argv: withGuard(argv, activeTimer), commandClass: "switch" })
   }
 
-  function appendFieldArguments(argv, fields) {
-    var values = fields || {}
-    var options = [
-      ["durationSeconds", "--duration"],
-      ["startedAt", "--started-at"],
-      ["localDate", "--date"],
-      ["projectId", "--project"],
-      ["clientId", "--client"],
-      ["serviceId", "--service"],
-      ["note", "--note"]
-    ]
-    for (var i = 0; i < options.length; i++) {
-      var propertyName = options[i][0]
-      if (values[propertyName] === undefined || values[propertyName] === null) continue
-      argv.push(options[i][1], String(values[propertyName]))
-    }
-    return argv
-  }
-
-  function mergeCreatedEntryReconciliations(existing, added) {
-    var merged = []
-    var sources = [Array.isArray(existing) ? existing : [], Array.isArray(added) ? added : []]
-    for (var sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
-      for (var itemIndex = 0; itemIndex < sources[sourceIndex].length; itemIndex++) {
-        var item = sources[sourceIndex][itemIndex]
-        var itemId = String((item || {}).id || "")
-        var replaced = false
-        for (var mergedIndex = 0; mergedIndex < merged.length; mergedIndex++) {
-          if (String((merged[mergedIndex] || {}).id || "") !== itemId) continue
-          merged[mergedIndex] = item
-          replaced = true
-          break
-        }
-        if (!replaced && itemId !== "") merged.push(item)
-      }
-    }
-    return merged
-  }
-
-  function createEntry(fields) {
-    var payload = {}
-    var values = fields || {}
-    for (var key in values) payload[key] = values[key]
-    var targetDate = String(payload.localDate || "")
-    // Establish a baseline for the exact target day before creating. If the
-    // later write has an unknown outcome, only an ID absent from this baseline
-    // can prove that FreshBooks accepted it.
-    enqueueNext("prepareCreateEntry", ["time", "list", "--from", targetDate, "--to", targetDate], payload, false)
-  }
-
-  function updateEntry(entryId, fields, snapshotToken) {
-    var guardToken = String(snapshotToken || "")
-    var draft = entryDraft || {}
-    var storedMode = String(draft.mode || "")
-    var draftEntryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
-    if ((storedMode === "edit" || (storedMode !== "create" && storedMode !== "new"))
-        && draftEntryId === String(entryId) && draft.dirty === true
-        && String(draft.snapshotToken || "") !== "")
-      guardToken = String(draft.snapshotToken)
-    var argv = appendFieldArguments(["time", "update", String(entryId)], fields)
-    if (guardToken !== "") argv.push("--snapshot", guardToken)
-    enqueue("updateEntry", argv, fields || {}, true)
-  }
-
-  function deleteEntry(entryId, snapshotToken) {
-    var argv = ["time", "delete", String(entryId), "--yes"]
-    if (String(snapshotToken || "") !== "") argv.push("--snapshot", String(snapshotToken))
-    enqueue("deleteEntry", argv, { entryId: entryId }, true)
-  }
-
-  function enqueue(intent, argv, payload, mutation, stdin, applyMine) {
-    if (mutation === true && (outcomeUnknown || conflictPending)) return false
-    _requestSerial += 1
-    var next = _queue.slice()
-    var request = {
-      id: "request-" + _requestSerial,
-      intent: intent,
-      argv: argv.slice(),
-      payload: payload || {},
-      mutation: mutation === true,
-      stdin: stdin === undefined ? undefined : String(stdin)
-    }
-    if (applyMine === true) request.applyMine = true
-    if (requestIsInteractive(request)) {
-      var insertionIndex = 0
-      while (insertionIndex < next.length && requestIsInteractive(next[insertionIndex])) insertionIndex += 1
-      if (insertionIndex === 0) next.unshift(request)
-      else next.splice(insertionIndex, 0, request)
-    } else next.push(request)
-    _queue = next
-    pump()
-    return true
-  }
-
-  function enqueueNext(intent, argv, payload, mutation) {
-    if (mutation === true && (outcomeUnknown || conflictPending)) return false
-    _requestSerial += 1
-    var next = _queue.slice()
-    next.unshift({
-      id: "request-" + _requestSerial,
-      intent: intent,
-      argv: argv.slice(),
-      payload: payload || {},
-      mutation: mutation === true
-    })
-    _queue = next
-    pump()
-    return true
-  }
-
+  function chooseMine(operationId, group) { return submitIntent({ type: "choose-mine", operationId: operationId, group: group }) }
+  function chooseFreshBooks(operationId, group) { return submitIntent({ type: "choose-freshbooks", operationId: operationId, group: group }) }
+  function restoreAsNew(operationId) { return submitIntent({ type: "restore-as-new", operationId: operationId }) }
+  function discardLocal(operationId) { return submitIntent({ type: "discard-local", operationId: operationId }) }
   function resolveConflictReload() {
-    var requestIntent = _conflictRequest ? String(_conflictRequest.intent || "") : ""
-    if (_draftConflict || requestIntent.indexOf("Timer") !== -1 || requestIntent === "correctDuration") clearTimerDraft()
-    else if (requestIntent.indexOf("Entry") !== -1) clearEntryDraft()
-    conflictPending = false
-    _draftConflict = false
-    _conflictRequest = null
-    clearError()
-    refreshAll(lastEntryFrom, lastEntryTo)
+    var conflict = view && view.conflicts && view.conflicts[0]
+    return conflict ? discardLocal(conflict.operationId) : false
   }
-
   function resolveConflictApplyMine() {
-    if (_draftConflict && activeTimer) {
-      var noteDirty = draftTimerNoteDirty
-      var durationDirty = draftTimerDurationDirty
-      var note = draftTimerNote
-      var duration = Model.parseDurationInput(draftTimerDuration)
-      conflictPending = false
-      _draftConflict = false
-      _conflictRequest = null
-      clearError()
-      if (noteDirty) enqueue("updateTimerNote", ["timer", "update", "--id", String(activeTimer.id), "--note", String(note)], { timerId: activeTimer.id }, true)
-      if (durationDirty && duration !== null) enqueue("correctDuration", ["timer", "correct", "--id", String(activeTimer.id), "--duration", String(duration)], { timerId: activeTimer.id }, true)
-      return
+    var conflict = view && view.conflicts && view.conflicts[0]
+    if (!conflict || !conflict.groups.length) return false
+    return chooseMine(conflict.operationId, conflict.groups[0].group)
+  }
+
+  function configureAuth(clientId, clientSecret, redirectUri) {
+    return submitRead("configure-auth", ["auth", "configure", "--client-id", String(clientId), "--client-secret", String(clientSecret), "--redirect-uri", String(redirectUri)], null, "visible-read")
+  }
+  function requestAuthorizationUrl() { authorizationUrl = ""; return submitRead("authorization-url", ["auth", "url"], null, "visible-read") }
+  function completeAuthentication(codeOrUrl) {
+    return submitIntent({ type: "refresh", requestKind: "visible-read", queryKey: "authentication", coverage: null,
+      argv: ["auth", "login", "--code-stdin"], stdin: String(codeOrUrl), commandClass: "read" })
+  }
+  function selectBusiness(businessId) { return submitRead("select-business", ["business", "use", String(businessId)], null, "visible-read") }
+
+  function adoptMetadata(completion) {
+    var key = String(completion.queryKey || "")
+    var data = completion.data
+    if (key === "diagnostics" && data) diagnostics = data
+    else if (key === "projects") projects = Array.isArray(data) ? data : (data && data.records || [])
+    else if (key === "businesses") businesses = Array.isArray(data) ? data : (data && data.records || [])
+    else if (key === "authorization-url" && data) authorizationUrl = String(data.url || data.authorizationUrl || "")
+    if (completion.outcome === "known-error" || completion.outcome === "unknown") {
+      lastErrorCode = String(completion.error && completion.error.code || "CLI_ERROR")
+      lastError = String(completion.error && completion.error.message || "FreshBooks request failed")
     }
-    if (!_conflictRequest) return
-    var request = _conflictRequest
-    var argv = replaceTrailingSnapshotGuard(request.argv, "")
-    conflictPending = false
-    _conflictRequest = null
-    clearError()
-    enqueue(request.intent, argv, request.payload, true, undefined, true)
-  }
-
-  function replaceTrailingSnapshotGuard(argv, snapshotToken) {
-    var result = Array.isArray(argv) ? argv.slice() : []
-    if (result.length >= 2 && result[result.length - 2] === "--snapshot") result.splice(result.length - 2, 2)
-    var replacement = String(snapshotToken || "")
-    if (replacement !== "") result.push("--snapshot", replacement)
-    return result
-  }
-
-  function resolveEntryUpdateGuard(request) {
-    if (!request || String(request.intent || "") !== "updateEntry" || request.applyMine === true) return
-    var draft = entryDraft || {}
-    var storedMode = String(draft.mode || "")
-    var draftEntryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
-    if (draft.dirty !== true || storedMode === "create" || storedMode === "new"
-        || draftEntryId === "" || draftEntryId !== String((request.argv || [])[2] || "")
-        || String(draft.snapshotToken || "") === "") return
-    request.argv = replaceTrailingSnapshotGuard(request.argv, String(draft.snapshotToken))
-  }
-
-  function pump() {
-    if (_current !== null || _queue.length === 0 || !cliAdapter) return
-    var next = _queue.slice()
-    _current = next.shift()
-    _queue = next
-    resolveEntryUpdateGuard(_current)
-    phase = _current.mutation ? "mutating" : "refreshing"
-    cliAdapter.execute(_current.id, _current)
-    if (_current.stdin !== undefined) _current.stdin = ""
-  }
-
-  function adoptTimerData(data) {
-    var receivedAt = Date.now()
-    var candidates = Model.timerCandidates(data)
-    var anchored = []
-    for (var i = 0; i < candidates.length; i++) {
-      var source = candidates[i] || {}
-      var timer = {}
-      for (var key in source) timer[key] = source[key]
-      if (timer.observedAtMs === undefined) timer.observedAtMs = receivedAt
-      anchored.push(timer)
-    }
-    var hasDirtyDraft = draftTimerNoteDirty || draftTimerDurationDirty
-    if (hasDirtyDraft && Model.recordSnapshotChanged(anchored, draftTimerId, draftTimerSnapshotToken)) {
-      conflictPending = true
-      _draftConflict = true
-      lastErrorCode = "REMOTE_CHANGED"
-      lastError = "FreshBooks changed this timer while you were editing. Reload it or apply your draft."
-    }
-    timers = anchored
-    if (timers.length === 1) selectedTimerId = String(timers[0].id)
-    else if (!Model.selectedTimer(timers, selectedTimerId)) selectedTimerId = ""
-    snapshotStale = false
-    lastRefreshMs = Date.now()
-  }
-
-  function anchoredTimer(record) {
-    if (!record || typeof record !== "object") return null
-    var result = {}
-    for (var key in record) result[key] = record[key]
-    if (result.observedAtMs === undefined) result.observedAtMs = Date.now()
-    return result
-  }
-
-  function adoptTimerMutation(intent, data, request) {
-    var action = String(intent || "")
-    var oldId = String((request && request.payload || {}).timerId || "")
-    var received = action === "switch" ? (data || {}).timer : data
-    var replacement = action === "log" ? null : anchoredTimer(received)
-    var replacementId = replacement ? String(replacement.id) : ""
-    var next = []
-    for (var i = 0; i < timers.length; i++) {
-      var candidateId = String((timers[i] || {}).id || "")
-      if ((oldId !== "" && candidateId === oldId) || (replacementId !== "" && candidateId === replacementId)) continue
-      next.push(timers[i])
-    }
-    if (replacement) next.push(replacement)
-    var retainedDraftForTimer = oldId !== "" && oldId === String(draftTimerId)
-    var retainedDirtyDraft = draftTimerNoteDirty || draftTimerDurationDirty
-    // A retained draft can only move to a non-empty snapshot produced by this
-    // confirmed plugin-owned mutation. Otherwise its prior baseline remains.
-    if (replacement && String(replacement.snapshotToken || "") !== ""
-        && retainedDraftForTimer && retainedDirtyDraft && replacementId === oldId)
-      stateData.timerSnapshotToken = String(replacement.snapshotToken)
-    // Logging removes the Active Timer, so no timer draft can remain useful.
-    else if (action === "log" && retainedDraftForTimer) clearTimerDraft()
-    timers = next
-    selectedTimerId = replacement ? replacementId : (timers.length === 1 ? String(timers[0].id) : "")
-    snapshotStale = false
-    lastRefreshMs = Date.now()
-  }
-
-
-  function createdEntryMatches(record, provenance) {
-    if (!record || !provenance || String(record.id || "") !== String(provenance.id || "")) return false
-    var fields = ["projectId", "clientId", "serviceId", "durationSeconds", "note", "localDate", "startedAt"]
-    for (var i = 0; i < fields.length; i++) {
-      var key = fields[i]
-      if (provenance[key] === undefined) continue
-      if (key === "durationSeconds") {
-        if (Number(record[key]) !== Number(provenance[key])) return false
-      } else if (String(record[key] === null ? "" : record[key]) !== String(provenance[key] === null ? "" : provenance[key])) return false
-    }
-    return true
-  }
-  function adoptEntryMutation(intent, data, request) {
-    var action = String(intent || "")
-    var payload = request && request.payload ? request.payload : {}
-    var targetId = action === "deleteEntry" ? String(payload.entryId || "") : String((data || {}).id || "")
-    var next = []
-    for (var i = 0; i < entries.length; i++) if (String((entries[i] || {}).id || "") !== targetId) next.push(entries[i])
-    if (action !== "deleteEntry" && data && typeof data === "object") next.push(data)
-    entries = next
-
-    if (action === "deleteEntry" || !data || typeof data !== "object") return
-    var recent = []
-    for (var j = 0; j < recentEntries.length; j++) if (String((recentEntries[j] || {}).id || "") !== String(data.id || "")) recent.push(recentEntries[j])
-    recent.unshift({
-      id: data.id,
-      projectId: data.projectId !== undefined ? data.projectId : payload.projectId,
-      serviceId: data.serviceId !== undefined ? data.serviceId : payload.serviceId,
-      startedAt: data.startedAt || new Date().toISOString()
-    })
-    recentEntries = recent
-    if (action === "createEntry" && data && typeof data === "object") {
-      var provenance = {}
-      var logicalFields = ["projectId", "clientId", "serviceId", "durationSeconds", "note", "localDate", "startedAt"]
-      for (var fieldIndex = 0; fieldIndex < logicalFields.length; fieldIndex++) {
-        var fieldName = logicalFields[fieldIndex]
-        if (payload[fieldName] !== undefined) provenance[fieldName] = payload[fieldName]
-        if (data[fieldName] !== undefined) provenance[fieldName] = data[fieldName]
-      }
-      provenance.id = data.id
-      _pendingCreatedEntryReconciliations = mergeCreatedEntryReconciliations(
-        _pendingCreatedEntryReconciliations, [provenance])
-    }
-  }
-
-  function adoptEntryData(data, creations) {
-    var received = Array.isArray(data) ? data : []
-    var reconciliations = Array.isArray(creations) ? creations : []
-    var draft = entryDraft || {}
-    var storedMode = String(draft.mode || "")
-    var mode = storedMode === "new" ? "create" : (storedMode === "create" || storedMode === "edit" ? storedMode : "edit")
-    var entryId = String(draft.entryId || (storedMode !== "edit" && storedMode !== "create" && storedMode !== "new" ? storedMode : ""))
-    var snapshotChanged = mode === "edit" && entryId !== "" && draft.dirty === true
-      && Model.recordSnapshotChanged(received, entryId, draft.snapshotToken)
-    if (snapshotChanged) {
-      for (var creationIndex = 0; creationIndex < reconciliations.length; creationIndex++) {
-        var creation = reconciliations[creationIndex]
-        if (String((creation || {}).id || "") !== entryId) continue
-        for (var receivedIndex = 0; receivedIndex < received.length; receivedIndex++) {
-          var reconciledEntry = received[receivedIndex]
-          if (String(reconciledEntry.snapshotToken || "") === "" || !createdEntryMatches(reconciledEntry, creation)) continue
-          var rebasedDraft = {}
-          for (var draftKey in draft) rebasedDraft[draftKey] = draft[draftKey]
-          rebasedDraft.snapshotToken = String(reconciledEntry.snapshotToken || "")
-          stateData.entryDraft = rebasedDraft
-          snapshotChanged = false
-          break
-        }
-        break
-      }
-    }
-    if (snapshotChanged) {
-      var fields = {
-        durationSeconds: Model.parseDurationInput(String(draft.duration || "")),
-        projectId: draft.projectId,
-        serviceId: draft.serviceId,
-        note: draft.note
-      }
-      var draftDate = String(draft.entryDate || draft.selectedDate || "")
-      if (draftDate !== String(draft.originalDate || draftDate)) fields.localDate = draftDate
-      var argv = appendFieldArguments(["time", "update", entryId], fields)
-      argv.push("--snapshot", String(draft.snapshotToken))
-      conflictPending = true
-      _draftConflict = false
-      _conflictRequest = { intent: "updateEntry", argv: argv, payload: fields, mutation: true }
-      lastErrorCode = "REMOTE_CHANGED"
-      lastError = "FreshBooks changed or removed this entry while you were editing. Reload it or apply your draft."
-    }
-    entries = received
-  }
-
-  function entryMatchesFields(entry, fields) {
-    var values = fields || {}
-    if (values.projectId !== undefined && String(entry.projectId) !== String(values.projectId)) return false
-    if (values.serviceId !== undefined && String(entry.serviceId) !== String(values.serviceId)) return false
-    if (values.durationSeconds !== undefined && Number(entry.durationSeconds) !== Number(values.durationSeconds)) return false
-    if (values.note !== undefined && String(entry.note || "") !== String(values.note || "")) return false
-    if (values.localDate !== undefined && String(entry.localDate) !== String(values.localDate)) return false
-    return true
-  }
-
-  function reconcileUnknownEntry(data) {
-    var request = _unknownRequest
-    if (!request) return
-    var received = Array.isArray(data) ? data : []
-    if (request.intent === "createEntry") {
-      if (String(request.payload.knownEntryDate || "") !== String(request.payload.localDate || "")) return
-      var known = request.payload.knownEntryIds || []
-      for (var i = 0; i < received.length; i++) {
-        if (known.indexOf(String(received[i].id)) === -1 && entryMatchesFields(received[i], request.payload)) {
-          clearEntryDraft()
-          break
-        }
-      }
-    } else if (request.intent === "updateEntry") {
-      for (var j = 0; j < received.length; j++) {
-        if (String(received[j].id) === String(request.argv[2]) && entryMatchesFields(received[j], request.payload)) {
-          clearEntryDraft()
-          break
-        }
-      }
-    } else if (request.intent === "deleteEntry") {
-      var found = false
-      for (var k = 0; k < received.length; k++) if (String(received[k].id) === String(request.payload.entryId)) found = true
-      if (!found) clearEntryDraft()
-    }
-  }
-
-  function finishRequest(requestId, data, error) {
-    if (!_current || String(_current.id) !== String(requestId)) return
-    var completed = _current
-    var reconcile = false
-    var followupCreate = null
-    var followupEntryRead = null
-    var refreshTimersAfter = false
-    var refreshEntriesAfter = false
-    var completedIntent = String(completed.intent || "")
-    var timerMutation = ["start", "pause", "resume", "correctDuration", "updateTimerNote", "log", "switch"].indexOf(completedIntent) !== -1
-    _current = null
-    if (completed.intent === "refreshTimers") _refreshQueued = false
-
-    if (error) {
-      if (timerMutation) clearOptimisticTimer()
-      var unresolvedOutcome = outcomeUnknown
-      phase = "error"
-      lastErrorCode = String(error.code || "UNKNOWN_ERROR")
-      lastError = String(error.message || "FreshBooks operation failed")
-      outcomeUnknown = error.outcomeUnknown === true || (completed.intent === _unknownRefreshIntent && unresolvedOutcome)
-      if (lastErrorCode === "REMOTE_CHANGED") {
-        conflictPending = true
-        _draftConflict = false
-        _conflictRequest = completed
-        refresh()
-      }
-      if (lastErrorCode === "TIMER_SWITCH_PARTIAL") refreshAll(lastEntryFrom, lastEntryTo)
-      if (error.outcomeUnknown === true) {
-        _unknownRefreshIntent = completed.intent.indexOf("Entry") !== -1 ? "refreshEntries" : "refreshTimers"
-        _unknownRequest = completed
-        _unknownOriginalFrom = lastEntryFrom
-        _unknownOriginalTo = lastEntryTo
-        if (_unknownRefreshIntent === "refreshEntries") {
-          var recoveryDate = completed.intent === "createEntry" ? String(completed.payload.localDate || "") : ""
-          _unknownRefreshFrom = recoveryDate !== "" ? recoveryDate : lastEntryFrom
-          _unknownRefreshTo = recoveryDate !== "" ? recoveryDate : lastEntryTo
-          var recoveryArgv = ["time", "list"]
-          if (_unknownRefreshFrom !== "") recoveryArgv.push("--from", _unknownRefreshFrom)
-          if (_unknownRefreshTo !== "") recoveryArgv.push("--to", _unknownRefreshTo)
-          followupEntryRead = {
-            argv: recoveryArgv,
-            payload: { fromDate: _unknownRefreshFrom, toDate: _unknownRefreshTo }
-          }
-        }
-        else refresh()
-      }
-      if (error.outcomeUnknown === true) {
-        var safeQueue = []
-        for (var q = 0; q < _queue.length; q++) if (!_queue[q].mutation) safeQueue.push(_queue[q])
-        _queue = safeQueue
-      }
-      if (completed.intent === "correctDuration") clearTimerDurationDraft()
-    } else {
-      phase = "ready"
-      if (completed.intent === "refreshTimers") {
-        adoptTimerData(data)
-        if (outcomeUnknown && _unknownRefreshIntent === "refreshTimers" && !conflictPending) {
-          outcomeUnknown = false
-          _unknownRefreshIntent = ""
-          _unknownRequest = null
-          _unknownOriginalFrom = ""
-          _unknownOriginalTo = ""
-        }
-      }
-      else if (completed.intent === "refreshProjects") {
-        projects = Array.isArray(data) ? data : []
-        _projectsConfirmed = true
-        cacheData.projects = projects
-      }
-      else if (completed.intent === "refreshRecentEntries") {
-        recentEntries = Array.isArray(data) ? data : []
-        _recentConfirmed = true
-        var recentCache = []
-        for (var r = 0; r < recentEntries.length; r++) recentCache.push({
-          id: recentEntries[r].id,
-          projectId: recentEntries[r].projectId,
-          serviceId: recentEntries[r].serviceId,
-          startedAt: recentEntries[r].startedAt
-        })
-        cacheData.recentEntries = recentCache
-      }
-      else if (completed.intent === "refreshDiagnostics") {
-        diagnostics = data || ({})
-        if (!conflictPending && !outcomeUnknown) clearError()
-        if (diagnosticsReady && diagnostics.authenticated === true && diagnostics.businessSelected !== true)
-          refreshBusinesses()
-        else if (setupReady() && _fullRefreshRequested) {
-          _fullRefreshRequested = false
-          refreshOperationalData()
-        }
-      }
-      else if (completed.intent === "configureAuth") {
-        clearError()
-        refreshDiagnostics()
-        requestAuthorizationUrl()
-      }
-      else if (completed.intent === "requestAuthorizationUrl") {
-        clearError()
-        authorizationUrl = String((data || {}).url || "")
-      }
-      else if (completed.intent === "completeAuthentication") {
-        clearError()
-        authorizationUrl = ""
-        refreshDiagnostics()
-      }
-      else if (completed.intent === "refreshBusinesses") {
-        clearError()
-        businesses = Array.isArray(data) ? data : []
-      }
-      else if (completed.intent === "selectBusiness") {
-        clearError()
-        businesses = []
-        refreshDiagnostics()
-      }
-      else if (completed.intent === "prepareCreateEntry") {
-        var createPayload = {}
-        for (var createKey in completed.payload) createPayload[createKey] = completed.payload[createKey]
-        createPayload.knownEntryDate = String(createPayload.localDate || "")
-        createPayload.knownEntryIds = []
-        var baselineEntries = Array.isArray(data) ? data : []
-        for (var baselineIndex = 0; baselineIndex < baselineEntries.length; baselineIndex++)
-          createPayload.knownEntryIds.push(String(baselineEntries[baselineIndex].id))
-        followupCreate = {
-          argv: appendFieldArguments(["time", "add"], createPayload),
-          payload: createPayload
-        }
-      }
-      else if (completed.intent === "refreshEntries") {
-        var isRecoveryRead = outcomeUnknown && _unknownRefreshIntent === "refreshEntries"
-          && String(completed.payload.fromDate || "") === _unknownRefreshFrom
-          && String(completed.payload.toDate || "") === _unknownRefreshTo
-        if (isRecoveryRead) reconcileUnknownEntry(data)
-        adoptEntryData(data, completed.payload.createdEntryReconciliations)
-        if (isRecoveryRead && !conflictPending) {
-          var restoreFrom = _unknownOriginalFrom
-          var restoreTo = _unknownOriginalTo
-          var recoveryFrom = _unknownRefreshFrom
-          var recoveryTo = _unknownRefreshTo
-          outcomeUnknown = false
-          _unknownRefreshIntent = ""
-          _unknownRequest = null
-          _unknownRefreshFrom = ""
-          _unknownRefreshTo = ""
-          if (restoreFrom !== recoveryFrom || restoreTo !== recoveryTo) {
-            var restoreArgv = ["time", "list"]
-            if (restoreFrom !== "") restoreArgv.push("--from", restoreFrom)
-            if (restoreTo !== "") restoreArgv.push("--to", restoreTo)
-            followupEntryRead = {
-              argv: restoreArgv,
-              payload: { fromDate: restoreFrom, toDate: restoreTo }
-            }
-          }
-          _unknownOriginalFrom = ""
-          _unknownOriginalTo = ""
-        }
-      }
-      else if (timerMutation) {
-        if (!conflictPending) clearError()
-        if (completed.intent === "updateTimerNote") clearTimerNoteDraft()
-        if (completed.intent === "correctDuration") clearTimerDurationDraft()
-        if (completed.intent === "log") adoptEntryMutation("log", data, completed)
-        adoptTimerMutation(completed.intent, data, completed)
-        clearOptimisticTimer()
-        refreshTimersAfter = true
-        refreshEntriesAfter = completed.intent === "log" || completed.intent === "switch"
-      }
-      else if (["createEntry", "updateEntry", "deleteEntry"].indexOf(completedIntent) !== -1) {
-        if (!conflictPending) clearError()
-        adoptEntryMutation(completed.intent, data, completed)
-        clearEntryDraft()
-        refreshEntriesAfter = true
-      }
-      else {
-        if (!conflictPending) clearError()
-        if ((completed.intent === "updateTimerNote" || completed.intent === "correctDuration") && data && data.snapshotToken)
-          stateData.timerSnapshotToken = String(data.snapshotToken)
-        if (completed.intent === "updateTimerNote") clearTimerNoteDraft()
-        if (completed.intent === "correctDuration") clearTimerDurationDraft()
-        if (completed.intent === "createEntry" || completed.intent === "updateEntry" || completed.intent === "deleteEntry") clearEntryDraft()
-        reconcile = true
-      }
-    }
-    if (phase !== "error") phase = conflictPending ? "conflict" : (timerMode === "multiple" ? "ambiguous" : "ready")
-    // Adopt authoritative mutation responses immediately, then refresh the
-    // affected collection quietly to catch changes made by another client.
-    if (followupEntryRead) enqueueNext("refreshEntries", followupEntryRead.argv, followupEntryRead.payload, false)
-    else if (followupCreate) enqueueNext("createEntry", followupCreate.argv, followupCreate.payload, true)
-    else if (refreshTimersAfter || refreshEntriesAfter) {
-      if (refreshTimersAfter) refresh()
-      if (refreshEntriesAfter) {
-        refreshRecentEntries()
-        refreshEntries(lastEntryFrom, lastEntryTo)
-      }
-      pump()
-    }
-    else if (reconcile) refreshAll(lastEntryFrom, lastEntryTo)
-    else pump()
   }
 
   Connections {
     target: root.cliAdapter
-    function onSucceeded(requestId, data) { root.finishRequest(requestId, data, null) }
-    function onFailed(requestId, error) { root.finishRequest(requestId, null, error) }
+    function onCompleted(completion) {
+      root.adoptMetadata(completion)
+      root.runtime.adapterCompleted(completion)
+      root.publishView()
+      root.flushActions()
+    }
   }
 
   CliAdapter { id: productionCli }
-
-  FileView {
-    id: draftFile
-    path: Quickshell.statePath("kmorey.freshbooks-time-drafts.json")
-    atomicWrites: true
-    printErrors: false
-    onAdapterUpdated: if (root._draftFileReady) writeAdapter()
-    onLoaded: {
-      var rawDraft = String(text() || "")
-      var parsedDraft = null
-      var parsedSuccessfully = true
-      try {
-        parsedDraft = JSON.parse(rawDraft)
-      } catch (error) {
-        parsedSuccessfully = false
+  LedgerStore {
+    id: ledgerStore
+    onLoaded: function(snapshot, recoveryError, unreadText) {
+      root.runtime.startup(snapshot)
+      if (recoveryError) {
+        root.lastErrorCode = String(recoveryError.code || "LEDGER_RECOVERY_FAILED")
+        root.lastError = String(recoveryError.message || "The operation ledger could not be restored")
       }
-      if (!parsedSuccessfully || !parsedDraft || typeof parsedDraft !== "object" || Array.isArray(parsedDraft) || parsedDraft.schemaVersion !== 2) {
-        root.preserveAndResetDraft(rawDraft)
-      } else {
-        root._draftFileReady = true
-      }
+      root.publishView()
+      root.flushActions()
+      root.refreshDiagnostics()
     }
-    onLoadFailed: {
-      var rawDraft = String(text() || "")
-      if (rawDraft !== "") {
-        root.preserveAndResetDraft(rawDraft)
-      } else {
-        root._draftFileReady = true
-      }
+    onSaved: function(transactionId) {
+      root.runtime.storeSaved(transactionId)
+      root.publishView()
+      root.flushActions()
     }
-
-    JsonAdapter {
-      id: stateData
-      property int schemaVersion: 2
-      property string timerId: ""
-      property string timerNote: ""
-      property string timerDuration: ""
-      property string timerSnapshotToken: ""
-      property bool timerNoteDirty: false
-      property bool timerDurationDirty: false
-      property var entryDraft: ({})
-    }
-  }
-
-  function preserveAndResetDraft(rawDraft) {
-    if (_draftResetPending) return
-    _draftResetPending = true
-    _draftFileReady = false
-    draftBackup.setText(String(rawDraft || ""))
-  }
-
-  function finishDraftReset() {
-    if (!_draftResetPending) return
-    _draftResetPending = false
-    if (stateData.schemaVersion !== 2) {
-      stateData.schemaVersion = 2
-    }
-    clearTimerDraft()
-    clearEntryDraft()
-    _draftFileReady = true
-    draftFile.writeAdapter()
-  }
-
-  function failDraftBackup(error) {
-    if (!_draftResetPending) return
-    _draftResetPending = false
-    _draftFileReady = false
-    phase = "error"
-    lastErrorCode = "DRAFT_BACKUP_FAILED"
-    lastError = "Could not preserve the incompatible draft; the original file was left untouched."
-  }
-
-  FileView {
-    id: draftBackup
-    path: Quickshell.statePath("kmorey.freshbooks-time-drafts.incompatible.json")
-    atomicWrites: true
-    printErrors: false
-    onSaved: root.finishDraftReset()
-    onSaveFailed: function(error) { root.failDraftBackup(error) }
-  }
-
-  FileView {
-    path: Quickshell.cachePath("kmorey.freshbooks-time-cache.json")
-    atomicWrites: true
-    printErrors: false
-    onAdapterUpdated: writeAdapter()
-    onLoaded: {
-      if (cacheData.schemaVersion !== 1) {
-        cacheData.schemaVersion = 1
-        cacheData.projects = []
-        cacheData.recentEntries = []
-      } else {
-        if (!root._projectsConfirmed && Array.isArray(cacheData.projects)) root.projects = cacheData.projects
-        if (!root._recentConfirmed && Array.isArray(cacheData.recentEntries)) root.recentEntries = cacheData.recentEntries
-      }
-    }
-
-    JsonAdapter {
-      id: cacheData
-      property int schemaVersion: 1
-      property var projects: []
-      property var recentEntries: []
+    onFailed: function(transactionId, error) {
+      root.runtime.storeFailed(transactionId, error)
+      root.publishView()
+      root.flushActions()
     }
   }
 
@@ -1089,9 +419,5 @@ Item {
       root.refresh()
       if (root.lastEntryFrom !== "" || root.lastEntryTo !== "") root.refreshEntries(root.lastEntryFrom, root.lastEntryTo)
     }
-  }
-
-  Component.onCompleted: {
-    refreshDiagnostics()
   }
 }
