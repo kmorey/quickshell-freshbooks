@@ -375,7 +375,7 @@ ShellRoot {
     id: failureExit
     interval: 3000
     repeat: false
-    onTriggered: Qt.quit()
+    onTriggered: Qt.exit(1)
   }
 
   FloatingWindow {
@@ -483,7 +483,7 @@ ShellRoot {
             objectName: "smokeFinishTarget"
             text: root.failure === "" ? "Finish smoke (exit 0)" : "Failure recorded"
             enabled: root.phase === "finished" || root.failure !== ""
-            onClicked: Qt.quit()
+            onClicked: Qt.exit(0)
           }
         }
       }
@@ -492,8 +492,9 @@ ShellRoot {
 
   Component.onCompleted: {
     if (String(Quickshell.env("SMOOTH_SETTLEMENT_SMOKE") || "") !== "1") {
-      fail("development harness requires SMOOTH_SETTLEMENT_SMOKE=1")
-      Qt.quit()
+      console.error("SMOOTH_SETTLEMENT_SMOKE failure: development harness requires SMOOTH_SETTLEMENT_SMOKE=1")
+      Qt.exit(1)
+      return
     }
     phaseWatchdog.restart()
   }

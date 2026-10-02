@@ -43,16 +43,15 @@ omarchy plugin validate .
 ```
 
 The final development gate is an opt-in real-QML smoke. Run it only from an
-Omarchy graphical session and isolate Quickshell's persisted state:
+Omarchy graphical session:
 
 ```bash
-state_root=$(mktemp -d)
-cache_root=$(mktemp -d)
-SMOOTH_SETTLEMENT_SMOKE=1 \
-  XDG_STATE_HOME="$state_root" \
-  XDG_CACHE_HOME="$cache_root" \
-  quickshell -p test/SmokeHarness.qml
+test/run-smoke.sh
 ```
+
+The launcher stages the repository beside Omarchy's `Commons` and `Ui` modules,
+creates isolated state/cache roots unless the caller supplies them, prints the
+tested revision and roots, and removes only its temporary QML stage on exit.
 
 The harness is never selected by production startup and refuses to run without
 `SMOOTH_SETTLEMENT_SMOKE=1`. It uses the production `Service`, `ServiceRuntime`,
