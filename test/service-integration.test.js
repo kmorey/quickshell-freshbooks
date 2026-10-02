@@ -408,7 +408,7 @@ test('quiet refreshes coalesce', () => {
   assert.equal(actions.filter(action => action.type === 'start').length, 1)
 })
 
-test('runtime mediates metadata and rejects stale or canceled deliveries', () => {
+test('runtime mediates metadata, accepts active coalesced reads, and rejects canceled deliveries', () => {
   const service = runtime()
   service.submitIntent({
     type: 'refresh', requestKind: 'quiet-read', queryKey: 'projects',
@@ -439,11 +439,16 @@ test('runtime mediates metadata and rejects stale or canceled deliveries', () =>
     type: 'refresh', requestKind: 'quiet-read', queryKey: 'businesses',
     responseKind: 'business-list', argv: ['business', 'list']
   })
-  assert.equal(service.adapterCompleted({
-    ...start.request, outcome: 'observation', data: [{ id: 1, name: 'stale' }]
-  }), null)
-  const newerStart = service.takeActions().find(action => action.type === 'start')
-  assert.ok(newerStart)
+  const coalesced = service.adapterCompleted({
+    ...start.request, outcome: 'observation', data: [{ id: 1, name: 'Current' }]
+  })
+  assert.deepEqual(coalesced, {
+    responseKind: 'business-list',
+    queryKey: 'businesses',
+    outcome: 'observation',
+    data: [{ id: 1, name: 'Current' }]
+  })
+  assert.equal(service.takeActions().some(action => action.type === 'start'), false)
 
   const cancelService = runtime([entry()])
   cancelService.submitIntent({

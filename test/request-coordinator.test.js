@@ -158,6 +158,22 @@ test('equivalent quiet reads coalesce', () => {
   assert.deepEqual(result.actions.map(action => action.type), ['drop'])
 })
 
+test('equivalent refresh coalesces behind an active read without superseding its result', () => {
+  let state = Coordinator.initialState(budgets)
+  const active = effect('active', { queryKey: 'active-timer' })
+  let result = enqueue(state, active)
+  state = result.state
+  assert.deepEqual(result.actions.map(action => action.type), ['start'])
+
+  result = enqueue(state, effect('poll', { queryKey: 'active-timer' }))
+  assert.equal(result.state.active.requestId, 'active')
+  assert.equal(result.state.queue.length, 0)
+  assert.deepEqual(result.actions.map(action => action.reason), ['coalesced-active'])
+
+  result = finish(result.state, active)
+  assert.deepEqual(result.actions.map(action => action.type), ['complete'])
+})
+
 test('newer complete broad read supersedes covered narrow read', () => {
   let state = Coordinator.initialState(budgets)
   state = enqueue(state, effect('blocker', { requestKind: 'mutation', priority: 1, queryKey: null, operationId: 'operation-0', scope: 'time-entry:0', commandClass: 'single-write' })).state

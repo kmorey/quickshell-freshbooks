@@ -76,6 +76,14 @@ function sameQuery(left, right) {
     && left.queryKey !== undefined && left.queryKey === right.queryKey
 }
 
+function equivalentActiveRead(newer, active) {
+  return active && !active.canceled && isRead(newer) && isRead(active)
+    && sameQuery(newer, active)
+    && newer.requestKind === active.requestKind
+    && newer.operationId === active.operationId
+    && newer.responseKind === active.responseKind
+}
+
 function covers(broad, narrow) {
   if (!broad || !narrow || broad.kind !== narrow.kind || broad.complete !== true) return false
   if (narrow.includesDeleted === true && broad.includesDeleted !== true) return false
@@ -175,6 +183,10 @@ function enqueue(state, event) {
   var request = clone(event.effect)
   request.enqueueSequence = next.nextSequence++
   request.canceled = false
+  if (equivalentActiveRead(request, next.active)) {
+    actions.push({ type: "drop", request: clone(request), reason: "coalesced-active" })
+    return { state: next, actions: actions }
+  }
   var protectsReconciliation = false
   if (isRead(request)) {
     if (next.active && sameQuery(request, next.active)
