@@ -350,8 +350,11 @@ test('keeps auth validation permission and guard failures known', () => {
       startError: { code: 'START_FAILED', message: 'Rejected' }
     }
   }
-  const partialRequest = mutation({ scope: 'active-timer:901' })
-  const classifyPartial = error => Contract.classifyProcessOutcome(partialRequest, {
+  const partialRequest = mutation({
+    scope: 'provisional:operation-8:timer-switch-target',
+    mutationKind: 'timer-switch'
+  })
+  const classifyPartial = (error, request = partialRequest) => Contract.classifyProcessOutcome(request, {
     exitCode: 1,
     exitStatus: 0,
     stderr: JSON.stringify({ schemaVersion: 1, ok: false, error })
@@ -360,6 +363,10 @@ test('keeps auth validation permission and guard failures known', () => {
   assert.equal(partialResult.outcome, 'known-error')
   assert.deepEqual(partialResult.error.details.partialReceipt, partialReceipt)
 
+  assert.equal(classifyPartial(partial, mutation({
+    scope: 'provisional:operation-9:timer-switch-target',
+    mutationKind: 'timer-switch'
+  })).outcome, 'unknown')
   const withoutOldDeletion = {
     ...partial,
     details: {

@@ -169,7 +169,7 @@ function validScope(scope) {
     || /^provisional:[^:]+:(time-entry-create|active-timer-create|timer-switch-target)$/.test(scope))
 }
 
-function requestScopeCovered(request, data) {
+function requestScopeCovered(request, data, allowUnassignedSwitchTarget) {
   for (var i = 0; i < data.changes.length; i++)
     if (data.changes[i].scope === request.scope) return true
   if (request.scope.indexOf("provisional:") !== 0) return false
@@ -179,8 +179,13 @@ function requestScopeCovered(request, data) {
     scopePrefix = "time-entry:"
   else if (expectedKind === "active-timer-create" && data.mutationKind === "timer-start")
     scopePrefix = "active-timer:"
-  else if (expectedKind === "timer-switch-target" && data.mutationKind === "timer-switch")
+  else if (expectedKind === "timer-switch-target" && data.mutationKind === "timer-switch") {
+    if (allowUnassignedSwitchTarget === true
+        && data.phase && data.phase.log === "confirmed" && data.phase.start === "failed"
+        && isString(request.operationId)
+        && request.scope === "provisional:" + request.operationId + ":timer-switch-target") return true
     scopePrefix = "active-timer:"
+  }
   if (scopePrefix === "") return false
   for (var j = 0; j < data.changes.length; j++)
     if (data.changes[j].scope.indexOf(scopePrefix) === 0
@@ -188,7 +193,7 @@ function requestScopeCovered(request, data) {
   return false
 }
 
-function validateReceipt(data, request) {
+function validateReceipt(data, request, allowUnassignedSwitchTarget) {
   if (!isObject(request) || !validScope(request.scope)) return false
   if (!hasOnly(data, ["contractVersion", "mutationKind", "changes", "results", "phase"])) return false
   if (data.contractVersion !== CONTRACT_VERSION
@@ -235,7 +240,7 @@ function validateReceipt(data, request) {
         || unmatched[found].kind === "timer-segment") return false
     unmatched.splice(found, 1)
   }
-  return requestScopeCovered(request, data)
+  return requestScopeCovered(request, data, allowUnassignedSwitchTarget)
 }
 
 function validateGuardRejection(error) {
@@ -387,7 +392,7 @@ function validateDeclaredError(error, request) {
   if (error.code === "GUARD_REJECTED") return validateGuardRejection(error)
   if (error.code === "TIMER_SWITCH_PARTIAL") {
     var details = error.details
-    if (!isObject(details) || !validateReceipt(details.partialReceipt, request)
+    if (!isObject(details) || !validateReceipt(details.partialReceipt, request, true)
         || !hasOnly(details.startError, ["code", "message"])
         || !isString(details.startError.code) || details.startError.code.length === 0
         || !isString(details.startError.message) || details.startError.message.length === 0

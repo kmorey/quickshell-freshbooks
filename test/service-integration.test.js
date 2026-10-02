@@ -174,18 +174,31 @@ test('partial switch preserves logged result', () => {
     patch: { assignment: { projectId: '77' } }, draft: { projectId: '77' },
     argv: ['timer', 'switch', '--project', '77', '--guard', tokenA], commandClass: 'switch'
   })
+  assert.match(request.scope, /^provisional:operation-\d+:timer-switch-target$/)
   const logged = entry('20', { token: 'c'.repeat(64) })
   const oldDeleted = { contractVersion: 2, kind: 'active-timer', id: base.id, exists: false, token: null }
-  service.adapterCompleted({ ...request, outcome: 'known-error', error: {
-    code: 'TIMER_SWITCH_PARTIAL', details: { partialReceipt: {
-      contractVersion: 2, mutationKind: 'timer-switch',
-      changes: [
-        { scope: 'time-entry:20', before: { absent: true }, after: { record: logged } },
-        { scope: 'active-timer:timer-1', before: { token: tokenA }, after: { deleted: true } }
-      ],
-      results: [logged, oldDeleted], phase: { log: 'confirmed', start: 'failed' }
-    }, startError: { code: 'START_FAILED', message: 'failed' } }
-  } })
+  const partialReceipt = {
+    contractVersion: 2, mutationKind: 'timer-switch',
+    changes: [
+      { scope: 'time-entry:20', before: { absent: true }, after: { record: logged } },
+      { scope: 'active-timer:timer-1', before: { token: tokenA }, after: { deleted: true } }
+    ],
+    results: [logged, oldDeleted], phase: { log: 'confirmed', start: 'failed' }
+  }
+  const completion = Contract.classifyProcessOutcome(request, {
+    exitCode: 1,
+    exitStatus: 0,
+    stderr: JSON.stringify({ schemaVersion: 1, ok: false, error: {
+      code: 'TIMER_SWITCH_PARTIAL',
+      message: 'Logged but did not start',
+      details: {
+        partialReceipt,
+        startError: { code: 'START_FAILED', message: 'failed' }
+      }
+    } })
+  })
+  assert.equal(completion.outcome, 'known-error')
+  service.adapterCompleted(completion)
   const actions = service.takeActions()
   assert.deepEqual(actions.map(action => action.type), ['persist'])
   assert.equal(actions[0].snapshot.operations.at(-1).receipt.phase.start, 'failed')
