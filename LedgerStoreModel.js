@@ -394,23 +394,36 @@ function validScope(scope, operationId) {
   return match !== null && match[1] === operationId
 }
 
-function validCreationBaseline(value) {
+function validCreationBaseline(value, operation) {
   if (!hasOnly(value, ["queryKey", "coverage", "identities"]) || !isId(value.queryKey)
       || !hasOnly(value.coverage, [
         "kind", "identity", "from", "to", "complete", "includesDeleted"
       ]) || (value.coverage.kind !== "time-entry" && value.coverage.kind !== "active-timer")
-      || !(value.coverage.identity === null
-        || isString(value.coverage.identity)
-          && value.coverage.identity.indexOf(value.coverage.kind + ":") === 0)
+      || value.coverage.identity !== null
       || !(value.coverage.from === null || isDate(value.coverage.from))
       || !(value.coverage.to === null || isDate(value.coverage.to))
       || value.coverage.complete !== true || value.coverage.includesDeleted !== true
       || !Array.isArray(value.identities)) return false
+  var scope = /^provisional:operation-\d+:(time-entry-create|active-timer-create|timer-switch-target)$/.exec(operation.scope)
+  if (!scope || !operation.intended || operation.intended.exists === false) return false
+  var creationClass = scope[1]
+  var expectedKind = creationClass === "time-entry-create" ? "time-entry" : "active-timer"
+  var expectedOperationKind = creationClass === "time-entry-create" ? "save-entry"
+    : creationClass === "active-timer-create" ? "start" : "switch"
+  if (operation.kind !== expectedOperationKind || operation.intended.kind !== expectedKind
+      || creationClass !== "timer-switch-target" && operation.base !== null
+      || value.coverage.kind !== expectedKind) return false
+  if (expectedKind === "time-entry") {
+    var date = operation.intended.localDate
+    if (value.queryKey !== "time-entries:" + date
+        || value.coverage.from !== date || value.coverage.to !== date) return false
+  } else if (value.queryKey !== "active-timer"
+      || value.coverage.from !== null || value.coverage.to !== null) return false
   var seen = {}
   for (var i = 0; i < value.identities.length; i++) {
     var identity = value.identities[i]
-    if (!isString(identity)
-        || identity.indexOf(value.coverage.kind + ":") !== 0 || seen[identity]) return false
+    if (!isString(identity) || identity === expectedKind + ":provisional"
+        || identity.indexOf(expectedKind + ":") !== 0 || seen[identity]) return false
     seen[identity] = true
   }
   return true
@@ -430,8 +443,10 @@ function validOperation(operation) {
       || !validPatch(operation.patch) || !(operation.intended === null || validRecord(operation.intended))
       || !validRequest(operation.request) || !isId(operation.causalTag)
       || !(operation.lineage === null || isId(operation.lineage))) return false
+  if (operation.scope.indexOf("provisional:") === 0
+      && operation.creationBaseline === undefined) return false
   if (operation.creationBaseline !== undefined
-      && !validCreationBaseline(operation.creationBaseline)) return false
+      && !validCreationBaseline(operation.creationBaseline, operation)) return false
   if (operation.state === "settled")
     return operation.draft === null && operation.projection === null
       && validReceipt(operation.receipt, operation)

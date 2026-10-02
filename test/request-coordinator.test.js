@@ -36,14 +36,14 @@ function finish(state, request, type = 'adapter-succeeded') {
   })
 }
 
-function ledgerReconciliationEffect() {
+function ledgerReconciliationEffect(options = {}) {
   const token = 'a'.repeat(64)
   const base = {
     contractVersion: 2,
     kind: 'time-entry',
     id: '9',
     exists: true,
-    localDate: '2026-09-02',
+    localDate: options.baseDate || '2026-09-02',
     startedAt: '2026-09-02T17:00:00.000Z',
     durationSeconds: 3600,
     projectId: '44',
@@ -54,6 +54,12 @@ function ledgerReconciliationEffect() {
     billed: false,
     token
   }
+  const intended = {
+    ...base,
+    localDate: options.intendedDate || base.localDate,
+    note: 'Changed locally',
+    token: 'b'.repeat(64)
+  }
   let result = Ledger.apply(Ledger.initialState({ records: [base] }), {
     type: 'intent',
     intent: {
@@ -61,8 +67,12 @@ function ledgerReconciliationEffect() {
       scope: 'time-entry:9',
       base,
       baseToken: token,
-      patch: { note: 'Changed locally' },
-      draft: { note: 'Changed locally' },
+      patch: {
+        note: 'Changed locally',
+        ...(options.intendedDate ? { date: { localDate: options.intendedDate } } : {})
+      },
+      intended,
+      draft: { note: 'Changed locally', localDate: intended.localDate },
       argv: ['time', 'update', '9'],
       commandClass: 'single-write'
     }
@@ -284,6 +294,60 @@ test('actual identity reconciliation is not subsumed by complete unrelated range
     }
   }))
   assert.equal(reconciliation.coverage.identity, 'time-entry:9')
+  assert.equal(result.state.queue.some(request => request.requestId === reconciliation.requestId), true)
+})
+
+test('two reconciliation consumers for one query both complete', () => {
+  const first = ledgerReconciliationEffect()
+  const second = {
+    ...first,
+    effectId: 'effect-reconcile-2',
+    operationId: 'operation-2',
+    requestId: 'reconcile-request-2',
+    scope: 'time-entry:10',
+    causalTag: 'cause-2'
+  }
+  let result = enqueue(Coordinator.initialState(budgets), first)
+  let state = enqueue(result.state, second).state
+  result = finish(state, first)
+  assert.deepEqual(result.actions.map(action => action.type), ['complete', 'start'])
+  assert.equal(result.actions[0].operationId, 'operation-1')
+  state = result.state
+  result = finish(state, second)
+  assert.equal(result.actions[0].type, 'complete')
+  assert.equal(result.actions[0].operationId, 'operation-2')
+})
+
+test('date-changing identity reconciliation requires range covering base and intended dates', () => {
+  let state = Coordinator.initialState(budgets)
+  state = enqueue(state, effect('blocker', {
+    requestKind: 'mutation',
+    priority: 1,
+    queryKey: null,
+    operationId: 'operation-0',
+    scope: 'time-entry:0',
+    commandClass: 'single-write'
+  })).state
+  const reconciliation = ledgerReconciliationEffect({
+    baseDate: '2026-09-02',
+    intendedDate: '2026-09-05'
+  })
+  state = enqueue(state, reconciliation).state
+  const result = enqueue(state, effect('partial-range', {
+    requestKind: 'visible-read',
+    priority: 3,
+    queryKey: 'entries:2026-09-05',
+    coverage: {
+      kind: 'time-entry',
+      identity: null,
+      from: '2026-09-05',
+      to: '2026-09-05',
+      complete: true,
+      includesDeleted: true
+    }
+  }))
+  assert.equal(reconciliation.coverage.from, '2026-09-02')
+  assert.equal(reconciliation.coverage.to, '2026-09-05')
   assert.equal(result.state.queue.some(request => request.requestId === reconciliation.requestId), true)
 })
 

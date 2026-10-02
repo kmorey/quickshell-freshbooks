@@ -607,6 +607,7 @@ test('restore as new omits deleted identity and uses provisional scope', () => {
   assert.equal(replacement.request.argv.includes('--project'), false)
   assert.equal(replacement.request.argv.includes('--service'), false)
   assert.equal(replacement.request.argv.includes(''), false)
+  assert.deepEqual(replacement.creationBaseline.identities, [])
   assert.equal(Store.deserialize(Store.serialize(result.effects[0].snapshot)).recoveryError, null)
 
   const base = activeTimer()
@@ -634,6 +635,7 @@ test('restore as new omits deleted identity and uses provisional scope', () => {
   assert.notEqual(restoredTimer.intended.segments[0].token, base.segments[0].token)
   assert.equal(restoredTimer.request.argv.includes('timer-1'), false)
   assert.equal(restoredTimer.request.argv.includes(''), false)
+  assert.deepEqual(restoredTimer.creationBaseline.identities, [])
   assert.equal(Store.deserialize(Store.serialize(timerResult.effects[0].snapshot)).recoveryError, null)
 })
 
@@ -889,6 +891,33 @@ test('create reconciliation keeps pre-dispatch identity baseline across observat
   result = reconcile(result.state, 'operation-1', [baseline, applied])
   assert.equal(result.state.operations[0].state, 'settled')
   assert.equal(result.state.records['time-entry:11'].id, '11')
+})
+
+test('creation baseline excludes unrelated provisional projections', () => {
+  let state = initial([])
+  for (let index = 1; index <= 3; index += 1) {
+    const intended = entry('provisional', {
+      note: `Draft ${index}`,
+      token: String(index).repeat(64)
+    })
+    const result = prepare(state, {
+      type: 'save-entry',
+      scope: null,
+      base: null,
+      baseToken: null,
+      intended,
+      patch: { note: intended.note },
+      draft: { note: intended.note },
+      argv: ['time', 'create', '--note', intended.note]
+    })
+    state = result.state
+    assert.doesNotThrow(() => Store.serialize(result.effects[0].snapshot))
+  }
+  assert.deepEqual(state.operations.map(operation => operation.creationBaseline.identities), [
+    [],
+    [],
+    []
+  ])
 })
 
 test('timer transition reconciliation uses logical semantics', () => {

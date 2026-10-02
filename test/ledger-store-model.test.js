@@ -94,6 +94,46 @@ function settledSnapshot() {
   return value
 }
 
+function creationSnapshot() {
+  const value = structuredClone(snapshot())
+  const operation = value.operations[0]
+  const intended = {
+    ...operation.intended,
+    id: 'provisional',
+    token: 'd'.repeat(64)
+  }
+  operation.kind = 'save-entry'
+  operation.scope = 'provisional:operation-1:time-entry-create'
+  operation.base = null
+  operation.baseToken = null
+  operation.patch = { note: intended.note }
+  operation.intended = intended
+  operation.projection = intended
+  operation.draft = { note: intended.note }
+  operation.request = {
+    requestId: 'request-1',
+    commandClass: 'single-write',
+    argv: ['time', 'create', '--note', intended.note]
+  }
+  operation.receipt = null
+  operation.lineage = null
+  delete operation.expectedToken
+  operation.creationBaseline = {
+    queryKey: 'time-entries:2026-09-02',
+    coverage: {
+      kind: 'time-entry',
+      identity: null,
+      from: '2026-09-02',
+      to: '2026-09-02',
+      complete: true,
+      includesDeleted: true
+    },
+    identities: ['time-entry:9']
+  }
+  value.records[operation.scope] = intended
+  return value
+}
+
 test('serialization includes only schema operations records and no transport secrets', () => {
   const serialized = Store.serialize(snapshot())
   const persisted = JSON.parse(serialized)
@@ -156,19 +196,7 @@ test('serialization strips nested receipt transport extras', () => {
 })
 
 test('creation baseline round-trips as typed query-scoped identities', () => {
-  const value = snapshot()
-  value.operations[0].creationBaseline = {
-    queryKey: 'time-entries:2026-09-02',
-    coverage: {
-      kind: 'time-entry',
-      identity: null,
-      from: '2026-09-02',
-      to: '2026-09-02',
-      complete: true,
-      includesDeleted: true
-    },
-    identities: ['time-entry:9']
-  }
+  const value = creationSnapshot()
   const restored = Store.deserialize(Store.serialize(value))
   assert.equal(restored.recoveryError, null)
   assert.deepEqual(restored.snapshot.operations[0].creationBaseline, value.operations[0].creationBaseline)
@@ -179,6 +207,34 @@ test('creation baseline round-trips as typed query-scoped identities', () => {
   value.operations[0].creationBaseline.identities = ['time-entry:9']
   value.operations[0].creationBaseline.coverage.identity = 'active-timer:timer-1'
   assert.throws(() => Store.serialize(value), /invalid durable ledger snapshot/)
+})
+
+test('malformed creation baseline is corrupt and preserves unread bytes', () => {
+  const cases = [
+    value => { value.operations[0].kind = 'pause' },
+    value => { value.operations[0].creationBaseline.queryKey = 'time-entries:other' },
+    value => { value.operations[0].creationBaseline.coverage.identity = 'time-entry:9' },
+    value => { value.operations[0].creationBaseline.coverage.from = '2026-09-01' },
+    value => { value.operations[0].creationBaseline.coverage.to = '2026-09-03' },
+    value => { value.operations[0].creationBaseline.identities = ['time-entry:provisional'] },
+    value => { delete value.operations[0].creationBaseline }
+  ]
+  function assertCorrupt(value) {
+    const raw = JSON.stringify(value)
+    const restored = Store.deserialize(raw)
+    assert.equal(restored.snapshot, null)
+    assert.equal(restored.recoveryError.code, 'LEDGER_CORRUPT')
+    assert.equal(restored.unreadText, raw)
+    assert.deepEqual(restored.effects, [])
+  }
+  for (const mutate of cases) {
+    const value = JSON.parse(Store.serialize(creationSnapshot()))
+    mutate(value)
+    assertCorrupt(value)
+  }
+  const knownUpdate = JSON.parse(Store.serialize(snapshot()))
+  knownUpdate.operations[0].creationBaseline = creationSnapshot().operations[0].creationBaseline
+  assertCorrupt(knownUpdate)
 })
 
 test('valid schema 1 restores', () => {

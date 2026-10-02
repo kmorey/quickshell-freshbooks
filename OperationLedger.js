@@ -409,15 +409,19 @@ function reconciliationRequest(operation) {
     }
   } else if (operation.scope.indexOf("time-entry:") === 0) {
     var entryId = operation.scope.slice("time-entry:".length)
-    var entryDate = operation.intended && operation.intended.localDate
-      || operation.base && operation.base.localDate || null
+    var intendedDate = operation.intended && operation.intended.localDate || null
+    var baseDate = operation.base && operation.base.localDate || null
+    var entryFrom = baseDate && intendedDate
+      ? (baseDate < intendedDate ? baseDate : intendedDate) : baseDate || intendedDate
+    var entryTo = baseDate && intendedDate
+      ? (baseDate > intendedDate ? baseDate : intendedDate) : baseDate || intendedDate
     queryKey = "time-entry:" + entryId
     argv = ["time", "get", entryId]
     coverage = {
       kind: "time-entry",
       identity: operation.scope,
-      from: entryDate,
-      to: entryDate,
+      from: entryFrom,
+      to: entryTo,
       complete: true,
       includesDeleted: true
     }
@@ -455,13 +459,15 @@ function reconciliationRequest(operation) {
   }
 }
 
-function creationBaseline(state, operation) {
+function creationBaseline(state, operation, excludedScope) {
   if (operation.scope.indexOf("provisional:") !== 0) return null
   var descriptor = reconciliationRequest(operation)
   var coverage = descriptor.coverage
   var identities = []
   var scopes = Object.keys(state.records)
   for (var i = 0; i < scopes.length; i++) {
+    if (scopes[i] === excludedScope) continue
+    if (scopes[i].indexOf("provisional:") === 0) continue
     var record = state.records[scopes[i]]
     if (!record || record.exists === false || record.kind !== coverage.kind) continue
     if (coverage.from && record.localDate < coverage.from) continue
@@ -653,6 +659,8 @@ function replacementOperation(state, operation, base, intended, options) {
     receipt: null,
     lineage: operation.operationId
   }
+  var replacementBaseline = creationBaseline(state, replacement, operation.scope)
+  if (replacementBaseline) replacement.creationBaseline = replacementBaseline
   state.operations.push(replacement)
   publishRecord(state, scope, intended)
   if (scope !== operation.scope) delete state.records[operation.scope]

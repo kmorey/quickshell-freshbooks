@@ -66,6 +66,8 @@ function takeNext(state, actions) {
   for (var i = 1; i < state.queue.length; i++)
     if (before(state.queue[i], state.queue[selected])) selected = i
   state.active = state.queue.splice(selected, 1)[0]
+  if (state.active.queryKey)
+    state.latestQueries[state.active.queryKey] = state.active.enqueueSequence
   actions.push(startAction(state, state.active))
 }
 
