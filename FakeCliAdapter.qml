@@ -44,6 +44,7 @@ Item {
   function completeNext() {
     if (!modelState.active) return false
     completionTimer.stop()
+    canceledCompletionTimer.stop()
     var request = modelState.active.request
     var finished = FakeCliModel.completeActive(modelState)
     modelState = finished.state
@@ -63,10 +64,20 @@ Item {
     onTriggered: root.completeNext()
   }
 
+  Timer {
+    id: canceledCompletionTimer
+    interval: 250
+    repeat: false
+    onTriggered: root.completeNext()
+  }
+
   function cancelRead(requestId) {
     var transition = FakeCliModel.cancelRead(modelState, requestId)
     modelState = transition.state
-    if (transition.canceled && autoComplete) completionTimer.restart()
+    if (transition.canceled && autoComplete) {
+      completionTimer.stop()
+      canceledCompletionTimer.restart()
+    }
     return transition.canceled
   }
 }

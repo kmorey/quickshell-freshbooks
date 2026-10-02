@@ -61,7 +61,7 @@
       "requestKind": "visible-read",
       "scope": null,
       "outcome": "observation",
-      "delayMs": 15000,
+      "delayMs": 300000,
       "data": {
         "records": [{ "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Planning", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
         "coverage": { "kind": "time-entry", "identity": null, "from": "2026-10-01", "to": "2026-10-01", "complete": true, "includesDeleted": true },

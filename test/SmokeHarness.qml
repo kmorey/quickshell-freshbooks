@@ -90,9 +90,11 @@ ShellRoot {
     return null
   }
 
-  function reopenSmokePanel() {
-    smokePanel.controller.hide()
-    panelReopen.restart()
+  function showSmokeTargets() {
+    var tracking = smokePanel.timeTracking
+    smokePanel.timeTracking = null
+    smokePanel.open()
+    smokePanel.timeTracking = tracking
   }
 
   function beginOptimisticScenario() {
@@ -227,12 +229,10 @@ ShellRoot {
               })
             } else if (root.phase === "restore-conflict" && completion.outcome === "known-error") {
               root.phase = "await-restore"
-              root.reopenSmokePanel()
             } else if (root.phase === "await-restore" && completion.outcome === "receipt") {
               root.phase = "restore-receipt"
             } else if (root.phase === "discard-conflict" && completion.outcome === "known-error") {
               root.phase = "await-discard"
-              root.reopenSmokePanel()
             }
           })
         }
@@ -258,11 +258,16 @@ ShellRoot {
     property var shell: null
   }
 
+  QtObject {
+    id: smokePanelOwner
+    function close() { smokePanel.close() }
+  }
+
   Plugin.Panel {
     id: smokePanel
     bar: smokeBar
     anchorItem: smokeAnchor
-    hostWidget: smokeHost
+    hostWidget: smokePanelOwner
     timeTracking: root.service
   }
 
@@ -300,7 +305,6 @@ ShellRoot {
           root.setCheckpoint("SMOKE-4", JSON.stringify(groups) === JSON.stringify(["duration", "note"])
             && (!otherAction || otherAction.canMutate !== false), groups.join(", "))
           root.phase = "await-field-choices"
-          root.reopenSmokePanel()
         }
       } else if (root.phase === "await-field-choices" && !root.conflictFor("time-entry:9")) {
         root.phase = "field-resolved"
@@ -361,15 +365,8 @@ ShellRoot {
   }
 
   Timer {
-    id: panelReopen
-    interval: 250
-    repeat: false
-    onTriggered: smokePanel.controller.show()
-  }
-
-  Timer {
     id: phaseWatchdog
-    interval: 45000
+    interval: 120000
     repeat: false
     onTriggered: root.fail("phase timed out: " + root.phase)
   }
@@ -461,6 +458,12 @@ ShellRoot {
             Button { objectName: "smokeDiscardTarget"; text: "5b Deletion / Discard"; enabled: root.phase === "restore-receipt"; onClicked: root.runAction("start discard conflict", root.beginDiscardConflict) }
             Button { objectName: "smokeRestartTarget"; text: "6 Unknown + restart"; enabled: root.phase === "deletions-resolved"; onClicked: root.runAction("start unknown restart", root.beginUnknownRestart) }
             Button { objectName: "smokeTickTarget"; text: "7 Running tick"; enabled: root.checkpoints[5].state === "PASS" && root.fake && !root.fake.busy && root.remainingScript.length === 0 && root.phase !== "ticking"; onClicked: root.runAction("start running tick", root.beginTickProof) }
+            Button {
+              objectName: "smokeShowTargets"
+              text: "Show production targets"
+              enabled: ["await-field-choices", "await-restore", "await-discard"].indexOf(root.phase) !== -1
+              onClicked: root.runAction("show production targets", root.showSmokeTargets)
+            }
           }
 
           Label {

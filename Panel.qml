@@ -161,7 +161,48 @@ Panel {
 
   function toggle() { opened ? close() : open() }
 
+  function keyboardConflictTargets() {
+    var targets = []
+    for (var i = 0; i < conflicts.length; i++) {
+      var conflict = conflicts[i]
+      if (conflict.deletion === true) {
+        targets.push({ operationId: conflict.operationId, action: "restore", group: "" })
+        targets.push({ operationId: conflict.operationId, action: "discard", group: "" })
+        continue
+      }
+      var groups = conflict.groups || []
+      for (var j = 0; j < groups.length; j++) {
+        targets.push({ operationId: conflict.operationId, action: "mine", group: groups[j].group })
+        targets.push({ operationId: conflict.operationId, action: "freshbooks", group: groups[j].group })
+      }
+    }
+    return targets
+  }
+
+  function conflictKeyboardIndex(operationId, group, action) {
+    var targets = keyboardConflictTargets()
+    for (var i = 0; i < targets.length; i++) {
+      if (String(targets[i].operationId) === String(operationId)
+          && String(targets[i].group) === String(group || "")
+          && targets[i].action === action) return i
+    }
+    return -1
+  }
+
+  function moveConflictKeyboardCursor(direction) {
+    var targets = keyboardConflictTargets()
+    if (!targets.length) return false
+    if (!cursorActive) {
+      cursorActive = true
+      keyboardCursor = direction < 0 ? targets.length - 1 : 0
+      return true
+    }
+    keyboardCursor = (keyboardCursor + (direction < 0 ? targets.length - 1 : 1)) % targets.length
+    return true
+  }
+
   function switchTab(direction) {
+    if (moveConflictKeyboardCursor(direction)) return
     cursorActive = true
     var tabs = ["timer", "projects", "calendar"]
     var index = tabs.indexOf(tab)
@@ -172,6 +213,10 @@ Panel {
   }
 
   function moveKeyboardCursor(dx, dy) {
+    if (keyboardConflictTargets().length) {
+      moveConflictKeyboardCursor(dx !== 0 ? dx : dy)
+      return
+    }
     if (!cursorActive) {
       cursorActive = true
       return
@@ -193,6 +238,20 @@ Panel {
   }
 
   function activateKeyboardCursor() {
+    var conflictTargets = keyboardConflictTargets()
+    if (conflictTargets.length) {
+      if (!cursorActive) {
+        cursorActive = true
+        keyboardCursor = 0
+        return
+      }
+      var target = conflictTargets[Math.max(0, Math.min(keyboardCursor, conflictTargets.length - 1))]
+      if (target.action === "mine") timeTracking.chooseMine(target.operationId, target.group)
+      else if (target.action === "freshbooks") timeTracking.chooseFreshBooks(target.operationId, target.group)
+      else if (target.action === "restore") timeTracking.restoreAsNew(target.operationId)
+      else if (target.action === "discard") timeTracking.discardLocal(target.operationId)
+      return
+    }
     if (!cursorActive) {
       cursorActive = true
       return
@@ -686,16 +745,36 @@ Panel {
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
                       }
-                      ActionButton { label: "Mine"; onTriggered: root.timeTracking.chooseMine(conflictItem.modelData.operationId, modelData.group) }
-                      ActionButton { label: "FreshBooks"; onTriggered: root.timeTracking.chooseFreshBooks(conflictItem.modelData.operationId, modelData.group) }
+                      ActionButton {
+                        label: "Mine"
+                        cursorIndex: root.conflictKeyboardIndex(conflictItem.modelData.operationId, modelData.group, "mine")
+                        hasCursor: root.cursorActive && cursorIndex === root.keyboardCursor
+                        onTriggered: root.timeTracking.chooseMine(conflictItem.modelData.operationId, modelData.group)
+                      }
+                      ActionButton {
+                        label: "FreshBooks"
+                        cursorIndex: root.conflictKeyboardIndex(conflictItem.modelData.operationId, modelData.group, "freshbooks")
+                        hasCursor: root.cursorActive && cursorIndex === root.keyboardCursor
+                        onTriggered: root.timeTracking.chooseFreshBooks(conflictItem.modelData.operationId, modelData.group)
+                      }
                     }
                   }
                   Flow {
                     visible: conflictItem.modelData.deletion === true
                     width: parent.width
                     spacing: Style.space(6)
-                    ActionButton { label: "Restore as new"; onTriggered: root.timeTracking.restoreAsNew(conflictItem.modelData.operationId) }
-                    ActionButton { label: "Discard local"; onTriggered: root.timeTracking.discardLocal(conflictItem.modelData.operationId) }
+                    ActionButton {
+                      label: "Restore as new"
+                      cursorIndex: root.conflictKeyboardIndex(conflictItem.modelData.operationId, "", "restore")
+                      hasCursor: root.cursorActive && cursorIndex === root.keyboardCursor
+                      onTriggered: root.timeTracking.restoreAsNew(conflictItem.modelData.operationId)
+                    }
+                    ActionButton {
+                      label: "Discard local"
+                      cursorIndex: root.conflictKeyboardIndex(conflictItem.modelData.operationId, "", "discard")
+                      hasCursor: root.cursorActive && cursorIndex === root.keyboardCursor
+                      onTriggered: root.timeTracking.discardLocal(conflictItem.modelData.operationId)
+                    }
                   }
                 }
               }
