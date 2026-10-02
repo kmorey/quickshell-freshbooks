@@ -25,6 +25,7 @@ ShellRoot {
   property string ledgerBeforeTick: ""
   property int elapsedBeforeTick: -1
   property int mutationCountBeforeRestart: -1
+  property int panelReadCompletions: 0
   readonly property var stack: serviceLoader.item
   readonly property var service: stack ? stack.service : null
   readonly property var fake: stack ? stack.fake : null
@@ -92,6 +93,7 @@ ShellRoot {
   function beginOptimisticScenario() {
     if (!service || phase !== "ready") return
     phase = "opening-real-editor"
+    panelReadCompletions = 0
     smokePanel.tab = "timer"
     smokePanel.open()
     service.unregisterVisibleConsumer(smokePanel.consumerId)
@@ -190,11 +192,14 @@ ShellRoot {
               return
             }
             if (root.phase === "opening-real-editor" && request.requestKind === "quiet-read") {
-              var entry = productionService.view.records["time-entry:9"]
-              if (!smokePanel.prepareSmokeEntryEdit(entry, "Local optimistic", "01:00"))
-                throw new Error("could not prepare production entry editor")
-              productionService.refreshEntries("2026-10-01", "2026-10-01")
-              root.phase = "await-real-save"
+              root.panelReadCompletions += 1
+              if (root.panelReadCompletions === 2) {
+                var entry = productionService.view.records["time-entry:9"]
+                if (!smokePanel.prepareSmokeEntryEdit(entry, "Local optimistic", "01:00"))
+                  throw new Error("could not prepare production entry editor")
+                productionService.refreshEntries("2026-10-01", "2026-10-01")
+                root.phase = "await-real-save"
+              }
             } else if (root.phase === "optimistic-old-read" && completion.canceled === true) {
               var optimistic = productionService.view.records["time-entry:9"]
               root.setCheckpoint("SMOKE-2", optimistic && optimistic.note === "Local optimistic",
@@ -308,13 +313,20 @@ ShellRoot {
         var unrelated10 = root.service.view.actions["time-entry:10"]
         var operations = root.service.view.operations || []
         var unknownCount = 0
-        for (var i = 0; i < operations.length; i++)
+        var unrelatedDraftCount = 0
+        var affectedDraftRestored = false
+        for (var i = 0; i < operations.length; i++) {
           if (operations[i].state === "unknown") unknownCount++
+          if (operations[i].scope === "time-entry:11" && operations[i].draftAvailable)
+            affectedDraftRestored = true
+          else if (operations[i].draftAvailable) unrelatedDraftCount++
+        }
         root.setCheckpoint("SMOKE-6", record && record.note === "Unknown local"
           && action && action.canMutate === false
-          && (!unrelated9 || unrelated9.canMutate !== false)
-          && (!unrelated10 || unrelated10.canMutate !== false)
-          && unknownCount === 1 && Object.keys(root.service.entryDraft || {}).length === 0
+          && unrelated9 && unrelated9.canMutate !== false
+          && unrelated10 && unrelated10.canMutate !== false
+          && unknownCount === 1 && affectedDraftRestored && unrelatedDraftCount === 0
+          && Object.keys(root.service.entryDraft || {}).length === 0
           && smokePanel.entryEditorMode === "closed"
           && root.requestCount("mutation") === root.mutationCountBeforeRestart,
           "one affected lock; mutation requests=" + root.requestCount("mutation"))
