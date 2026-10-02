@@ -37,6 +37,18 @@ function runtime(records = []) {
   instance.startup({ schemaVersion: 1, operations: [], records: Object.fromEntries(records.map(record => [`${record.kind}:${record.id}`, record])) })
   return instance
 }
+test('cached projects can seed the runtime before durable startup', () => {
+  const service = createServiceRuntime({ Ledger, Coordinator, budgets })
+  const projects = [{ id: 44, title: 'Build' }]
+
+  service.seedProjects(projects)
+  service.startup({ schemaVersion: 1, operations: [], records: {} })
+
+  assert.deepEqual(service.getView().projects, projects)
+  assert.equal(Object.isFrozen(service.getView().projects), true)
+  assert.equal(Object.isFrozen(service.getView().projects[0]), true)
+})
+
 
 function updateIntent(overrides = {}) {
   const base = entry()

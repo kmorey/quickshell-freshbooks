@@ -206,6 +206,11 @@ function createServiceRuntime(options) {
 
   return {
     getView: function() { return view },
+    seedProjects: function(records) {
+      projects = immutableCopy(Array.isArray(records) ? records : [])
+      publishView()
+    },
+
 
     submitIntent: function(intent) {
       if (!intent || typeof intent.type !== "string") return false
@@ -232,7 +237,6 @@ function createServiceRuntime(options) {
       startedRequests = {}
       activePersistId = null
       pendingPersists = []
-      projects = Object.freeze([])
       var result = Ledger.apply(ledgerState, { type: "startup" })
       ledgerState = result.state
       ledgerView = result.view

@@ -5,7 +5,7 @@ An Omarchy 4 / Quickshell bar plugin for managing FreshBooks timers and reviewin
 The popup provides:
 
 - a live Timer tab with notes, explicit duration correction, pause/resume, and log
-- a Projects tab ordered by the active and most recently used project/service combinations, with one-click safe switching
+- a Projects tab ordered by the active and most recently used project/service combinations, with one-click safe switching, immediate loading from a disposable local cache, and an explicit FreshBooks refresh button
 - a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists showing project, service, and notes; **Play** starts fresh time from an entry or resumes a matching paused timer, and **Stop** pauses a running timer with the same project, service, and notes
 - guided OAuth and business selection when FreshBooks has not been configured yet
 
@@ -13,7 +13,7 @@ Accepted edits update the panel immediately and close an open entry editor while
 
 If a write times out or otherwise has an unknown outcome, the plugin never retries it automatically. It keeps the affected record locked, preserves the draft and projection across restart, and performs a deletion-aware reconciliation read; unrelated records remain usable. When FreshBooks changed the same record, conflicts are shown by semantic field group—note, duration, date, assignment, or timer state—so each group can use **Mine** or **FreshBooks**. If FreshBooks deleted a locally edited record, choose **Restore as new** to create a fresh record without reusing the deleted identity, or **Discard local** to accept the deletion.
 
-FreshBooks remains authoritative. The plugin refreshes when opened, after mutations that still require reconciliation, and 15 seconds after the previous visible refresh settles. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
+FreshBooks remains authoritative. The plugin refreshes timers and calendar ranges when opened, after mutations that still require reconciliation, and 15 seconds after the previous visible refresh settles. The confirmed project list is cached in Quickshell's cache directory because it changes infrequently; opening the Projects tab uses that cache, while its refresh button replaces it from FreshBooks. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
 
 ## Requirements
 

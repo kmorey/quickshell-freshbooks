@@ -232,7 +232,7 @@ Panel {
       return
     }
     if (dx !== 0) { switchTab(dx); return }
-    var count = tab === "timer" ? 5 : (tab === "projects" ? projectShortcuts.length : dayEntries.length * 2 + 1)
+    var count = tab === "timer" ? 5 : (tab === "projects" ? projectShortcuts.length + 1 : dayEntries.length * 2 + 1)
     keyboardCursor = Math.max(0, Math.min(count - 1, keyboardCursor + dy))
     if (tab === "calendar" && keyboardCursor === 0 && dy < 0) calendarGridFocused = true
   }
@@ -263,8 +263,10 @@ Panel {
       else if (keyboardCursor === 2 && activeTimer && canMutateRecord(activeTimer)) timerRunning(activeTimer) ? timeTracking.pause() : timeTracking.resume()
       else if (keyboardCursor === 3 && activeTimer && canMutateRecord(activeTimer)) timeTracking.log()
       else if (keyboardCursor === 4) refresh()
-    } else if (tab === "projects" && projectShortcuts.length) {
-      startShortcut(projectShortcuts[Math.min(keyboardCursor, projectShortcuts.length - 1)])
+    } else if (tab === "projects") {
+      if (keyboardCursor === 0) timeTracking.refreshProjects(true)
+      else if (projectShortcuts.length)
+        startShortcut(projectShortcuts[Math.min(keyboardCursor - 1, projectShortcuts.length - 1)])
     } else if (tab === "calendar") {
       if (calendarGridFocused) {
         selectedDateKey = calendarCursorDateKey
@@ -959,7 +961,31 @@ Panel {
             visible: root.tab === "projects"
             anchors.fill: parent
             spacing: Style.space(8)
-            TextField { id: searchField; width: parent.width; placeholderText: "Search projects or clients"; text: root.projectSearch; onTextChanged: root.projectSearch = text }
+            Row {
+              id: projectTools
+              width: parent.width
+              spacing: Style.space(6)
+              TextField {
+                id: searchField
+                width: parent.width - projectRefreshButton.width - parent.spacing
+                placeholderText: "Search projects or clients"
+                text: root.projectSearch
+                onTextChanged: root.projectSearch = text
+              }
+              ActionButton {
+                id: projectRefreshButton
+                cursorIndex: 0
+                hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === 0
+                label: ""
+                iconText: root.timeTracking && root.timeTracking.refreshing ? "󰦖" : "󰑐"
+                iconSpinning: root.timeTracking && root.timeTracking.refreshing
+                tooltipText: "Refresh projects from FreshBooks"
+                implicitWidth: Style.space(38)
+                implicitHeight: searchField.implicitHeight
+                enabled: root.timeTracking && !root.timeTracking.busy
+                onTriggered: root.timeTracking.refreshProjects(true)
+              }
+            }
             Text {
               id: projectStatus
               visible: root.timerActionPending
@@ -972,7 +998,7 @@ Panel {
             }
             Flickable {
               width: parent.width
-              height: parent.height - searchField.height
+              height: parent.height - projectTools.height
                 - (projectStatus.visible ? projectStatus.implicitHeight + Style.space(8) : 0)
                 - Style.space(8)
               contentHeight: projectColumn.implicitHeight
@@ -992,7 +1018,7 @@ Panel {
                       : (current ? root.selectedContentColor : root.foreground)
                     width: projectColumn.width
                     height: Style.space(58)
-                    hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === index
+                    hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === index + 1
                     current: root.activeTimer
                       && String(root.activeTimer.projectId) === String(modelData.projectId)
                       && String(root.activeTimer.serviceId) === String(modelData.serviceId)
@@ -1010,7 +1036,7 @@ Panel {
                       onContainsMouseChanged: {
                         if (!containsMouse) return
                         root.cursorActive = true
-                        root.keyboardCursor = index
+                        root.keyboardCursor = index + 1
                       }
                       onClicked: root.startShortcut(modelData)
                     }
@@ -1070,7 +1096,7 @@ Panel {
                       onHovered: function(h) {
                         if (!h) return
                         root.cursorActive = true
-                        root.keyboardCursor = index
+                        root.keyboardCursor = index + 1
                       }
                       onClicked: root.startShortcut(modelData)
                     }

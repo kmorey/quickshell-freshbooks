@@ -171,13 +171,16 @@ Item {
     }, "quiet-read")
   }
 
-  function refreshProjects() { return submitRead("projects", ["projects", "list"], null, "quiet-read", "project-list") }
+  function refreshProjects(force) {
+    if (force !== true && view && Array.isArray(view.projects) && view.projects.length > 0) return false
+    return submitRead("projects", ["projects", "list"], null, "quiet-read", "project-list")
+  }
   function refreshBusinesses() { return submitRead("businesses", ["business", "list"], null, "quiet-read", "business-list") }
   function refreshDiagnostics() { return submitRead("diagnostics", ["diagnostics", "status"], null, "quiet-read", "diagnostics") }
 
   function refreshView(target, fromDate, toDate) {
-    if (target === "entries") return refreshEntries(fromDate, toDate)
-    if (target === "projects") return refreshProjects()
+    if (target === "calendar" || target === "entries") return refreshEntries(fromDate, toDate)
+    if (target === "projects") return refreshProjects(false)
     return refresh()
   }
 
@@ -379,6 +382,7 @@ Item {
     var data = completion.data
     if (completion.outcome === "observation") {
       if (kind === "diagnostics" && data) diagnostics = data
+      else if (kind === "project-list") projectCache.save(data)
       else if (kind === "business-list") businesses = data
       else if (kind === "auth-url") authorizationUrl = String(data && data.url || "")
       else if (kind === "auth-configured") {
@@ -389,6 +393,8 @@ Item {
         refreshDiagnostics()
       } else if (kind === "business-selection") {
         businesses = []
+        runtime.seedProjects([])
+        projectCache.clear()
         refreshDiagnostics()
       }
     } else if (completion.outcome === "known-error" || completion.outcome === "unknown") {
@@ -404,6 +410,14 @@ Item {
       root.adoptMetadata(metadata)
       root.publishView()
       root.flushActions()
+    }
+  }
+
+  ProjectCache {
+    id: projectCache
+    onLoaded: function(projects) {
+      root.runtime.seedProjects(projects)
+      root.publishView()
     }
   }
 
