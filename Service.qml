@@ -311,7 +311,7 @@ Item {
   }
 
   function pause() { return activeTimer && timerIntent("pause", { "timer-state": { state: "paused" } }, ["timer", "pause", "--id", String(activeTimer.id)]) }
-  function resume() { return activeTimer && timerIntent("resume", { "timer-state": { state: "running" } }, ["timer", "resume", "--id", String(activeTimer.id)]) }
+  function resume() { return activeTimer && !Model.timerRunning(activeTimer) && timerIntent("resume", { "timer-state": { state: "running" } }, ["timer", "resume", "--id", String(activeTimer.id)]) }
   function correctDuration(seconds) { return activeTimer && timerIntent("correct-duration", { duration: Number(seconds) }, ["timer", "correct", "--id", String(activeTimer.id), "--duration", String(seconds)]) }
   function updateNote(note) { return activeTimer && timerIntent("update-note", { note: String(note || "") }, ["timer", "update", "--id", String(activeTimer.id), "--note", String(note || "")]) }
   function updateTimerNote(note) { return updateNote(note) }

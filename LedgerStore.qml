@@ -28,6 +28,10 @@ Item {
 
   function save(snapshot, transactionId) {
     var id = String(transactionId || "")
+    if (!ready) {
+      failed(id, { code: "LEDGER_NOT_READY", message: "The operation ledger is still loading." })
+      return
+    }
     if (recoveryLocked) {
       failed(id, { code: "LEDGER_RECOVERY_LOCKED", message: "Recover the unread ledger before saving." })
       return

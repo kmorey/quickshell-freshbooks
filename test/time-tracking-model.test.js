@@ -126,6 +126,11 @@ test('projects every timer intent as canonical logical timer state', () => {
   assert.equal(resumed.segments[1].running, true)
   assert.equal(resumed.elapsedAnchor.runningStartedAt, now)
 
+  const repeatedResume = model.projectTimerIntent('resume', base, {}, now)
+  assert.equal(repeatedResume.segments.length, 1)
+  assert.equal(repeatedResume.segments.filter(segment => segment.running).length, 1)
+  assert.deepEqual(repeatedResume, base)
+
   const corrected = model.projectTimerIntent('correct-duration', base, { durationSeconds: 30 }, now)
   assert.equal(corrected.elapsedAnchor.closedSeconds, 0)
   assert.equal(corrected.elapsedAnchor.runningStartedAt, '2026-09-01T15:00:30.000Z')

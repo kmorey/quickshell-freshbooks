@@ -13,6 +13,15 @@ function immutableCopy(value) {
   return value
 }
 
+function runningTimer(timer) {
+  if (!timer) return false
+  if (timer.running === true || timer.isRunning === true || timer.state === "running") return true
+  var segments = Array.isArray(timer.segments) ? timer.segments : []
+  for (var i = 0; i < segments.length; i++)
+    if (segments[i] && segments[i].running === true) return true
+  return false
+}
+
 function createServiceRuntime(options) {
   options = options || {}
   var Ledger = options.Ledger
@@ -33,6 +42,7 @@ function createServiceRuntime(options) {
   var activePersistId = null
   var pendingPersists = []
   var recoveryError = null
+  var ready = false
 
 
   function publishView() {
@@ -49,7 +59,7 @@ function createServiceRuntime(options) {
 
   publishView()
   function queuePersist(effect) {
-    if (recoveryError) return
+    if (!ready || recoveryError) return
     var action = {
       type: "persist",
       snapshot: effect.snapshot,
@@ -200,7 +210,8 @@ function createServiceRuntime(options) {
     submitIntent: function(intent) {
       if (!intent || typeof intent.type !== "string") return false
       if (intent.type === "refresh") return submitRefresh(intent)
-      if (recoveryError) return false
+      if (!ready || recoveryError) return false
+      if (intent.type === "resume" && runningTimer(intent.base)) return false
       var previousState = ledgerState
       var result = applyLedger({ type: "intent", intent: intent })
       return result.state !== previousState
@@ -213,6 +224,7 @@ function createServiceRuntime(options) {
         persistent: true,
         actionable: true
       }) : null
+      ready = true
       var restored = snapshot && !recoveryError ? Ledger.restore(snapshot) : null
       ledgerState = restored || Ledger.initialState()
       coordinatorState = Coordinator.initialState(options.budgets)

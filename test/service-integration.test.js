@@ -144,6 +144,42 @@ test('every timer intent is canonical and serializable before dispatch', () => {
   }
 })
 
+test('running timer resume is rejected before persistence or dispatch', () => {
+  const current = timer()
+  const intended = Model.projectTimerIntent('resume', current, {}, '2026-09-02T17:30:30.000Z')
+  const serialized = Store.serialize({
+    schemaVersion: 1,
+    operations: [],
+    records: { 'active-timer:timer-1': intended }
+  })
+  assert.equal(Store.deserialize(serialized).recoveryError, null)
+  assert.equal(intended.segments.length, 1)
+
+  const service = runtime([current])
+  assert.equal(service.submitIntent({
+    type: 'resume', scope: 'active-timer:timer-1', base: current, baseToken: current.token,
+    intended, patch: { 'timer-state': { state: 'running' } }, draft: {},
+    argv: ['timer', 'resume', '--id', current.id], commandClass: 'multi-segment'
+  }), false)
+  assert.deepEqual(service.takeActions(), [])
+  assert.equal(service.getView().operations.length, 0)
+})
+
+test('mutation remains locked until ledger startup completes', () => {
+  const service = createServiceRuntime({ Ledger, Coordinator, budgets })
+  assert.equal(service.submitIntent(updateIntent()), false)
+  assert.deepEqual(service.takeActions(), [])
+
+  const unread = '{"schemaVersion":99,"operations":[SENSITIVE BYTES'
+  const loaded = Store.deserialize(unread)
+  service.startup(loaded.snapshot, loaded.recoveryError)
+
+  assert.equal(loaded.unreadText, unread)
+  assert.equal(service.submitIntent(updateIntent()), false)
+  assert.deepEqual(service.takeActions(), [])
+  assert.equal(service.getView().errors.at(-1).code, 'LEDGER_CORRUPT')
+})
+
 test('corrupt and unsupported ledger recovery locks mutations without replacing unread bytes', () => {
   const cases = [
     ['{"schemaVersion":99,"operations":[SENSITIVE BYTES', 'LEDGER_CORRUPT'],

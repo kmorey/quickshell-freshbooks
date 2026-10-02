@@ -204,7 +204,11 @@ function stateProjection(snapshot, selectedTimerId) {
 
 function timerRunning(timer) {
   if (!timer) return false
-  return timer.running === true || timer.isRunning === true
+  if (timer.running === true || timer.isRunning === true || timer.state === "running") return true
+  var segments = asArray(timer.segments)
+  for (var i = 0; i < segments.length; i++)
+    if (segments[i] && segments[i].running === true) return true
+  return false
 }
 
 function elapsedSeconds(timer, nowMs) {
@@ -309,6 +313,7 @@ function projectTimerIntent(type, base, values, observedAt) {
   if (type === "log" || type === "discard") return {
     contractVersion: 2, kind: "active-timer", id: String(base.id), exists: false, token: null
   }
+  if (type === "resume" && timerRunning(base)) return cloneValue(base)
 
   var intended = cloneValue(base)
   intended.elapsedAnchor.observedAt = now
@@ -564,5 +569,6 @@ if (typeof module !== "undefined") module.exports = {
   stateProjection: stateProjection,
   sundayWeek: sundayWeek,
   timerCandidates: timerCandidates,
-  timerMode: timerMode
+  timerMode: timerMode,
+  timerRunning: timerRunning
 }
