@@ -63,19 +63,30 @@ test('projects zero, one, and multiple remote timers explicitly', () => {
   assert.equal(projected.timerCandidates.length, 2)
 })
 
-test('detects remote snapshot changes only for the selected record', () => {
-  const records = [{ id: 1, snapshotToken: 'same' }, { id: 2, snapshotToken: 'remote' }]
-  assert.equal(model.recordSnapshotChanged(records, 1, 'same'), false)
-  assert.equal(model.recordSnapshotChanged(records, 2, 'local'), true)
-  assert.equal(model.recordSnapshotChanged(records, 3, 'local'), true)
-  assert.equal(model.recordSnapshotChanged(records, 2, ''), false)
-})
 
-test('ticks a running Active Timer from the confirmed observation and never ticks paused time', () => {
-  const observedAtMs = Date.parse('2026-09-01T15:00:00Z')
-  assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: true, observedAtMs }, observedAtMs + 4550), 124)
-  assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: false, observedAtMs }, observedAtMs + 4550), 120)
-  assert.equal(model.elapsedSeconds({ elapsedSeconds: 120, running: true, observedAtMs }, observedAtMs - 1000), 120)
+test('projects running elapsed from anchor without mutating record', () => {
+  const nowMs = Date.parse('2026-09-01T15:00:04.550Z')
+  const running = Object.freeze({
+    elapsedAnchor: Object.freeze({
+      closedSeconds: 120,
+      runningStartedAt: '2026-09-01T15:00:00.000Z'
+    })
+  })
+  const before = {
+    elapsedAnchor: {
+      closedSeconds: 120,
+      runningStartedAt: '2026-09-01T15:00:00.000Z'
+    }
+  }
+
+  assert.equal(model.projectElapsedSeconds(running, nowMs), 124)
+  assert.equal(model.projectElapsedSeconds({
+    elapsedAnchor: {
+      closedSeconds: 120,
+      runningStartedAt: null
+    }
+  }, nowMs), 120)
+  assert.deepEqual(running, before)
   assert.equal(model.formatDuration(3661), '01:01:01')
   assert.equal(model.formatHoursMinutes(3661), '01:01')
   assert.equal(model.formatHoursMinutes(59), '00:00')
@@ -95,10 +106,6 @@ test('sums unique Timer Segments for the full resumed Active Timer duration', ()
   }
 
   assert.equal(model.logicalTimerElapsedSeconds(timer, nowMs), 7800)
-  const paused = model.optimisticTimer(timer, 'pause', {}, nowMs)
-  assert.equal(model.logicalTimerElapsedSeconds(paused, nowMs + 5000), 7800)
-  const resumed = model.optimisticTimer(paused, 'resume', {}, nowMs + 5000)
-  assert.equal(model.logicalTimerElapsedSeconds(resumed, nowMs + 10000), 7805)
 })
 
 test('keeps the CLI aggregate when segment details contain only the active continuation', () => {
@@ -125,50 +132,6 @@ test('omits a zero hour from the bar timer label', () => {
   assert.equal(model.formatTimerLabel(15081), '4:11:21')
 })
 
-test('projects timer mutations immediately while FreshBooks is pending', () => {
-  const observedAtMs = Date.parse('2026-09-03T15:00:00Z')
-  const nowMs = observedAtMs + 5000
-  const running = {
-    id: 42,
-    projectId: 7,
-    serviceId: 9,
-    note: 'Work',
-    running: true,
-    elapsedSeconds: 120,
-    observedAtMs
-  }
-
-  assert.deepEqual(model.optimisticTimer(running, 'pause', {}, nowMs), {
-    ...running,
-    running: false,
-    elapsedSeconds: 125,
-    observedAtMs: nowMs
-  })
-  assert.deepEqual(model.optimisticTimer({ ...running, running: false }, 'resume', {}, nowMs), {
-    ...running,
-    running: true,
-    elapsedSeconds: 120,
-    observedAtMs: nowMs
-  })
-  assert.equal(model.optimisticTimer(running, 'correctDuration', { durationSeconds: 3600 }, nowMs).elapsedSeconds, 3600)
-  assert.equal(model.optimisticTimer(running, 'updateTimerNote', { note: 'Updated' }, nowMs).note, 'Updated')
-  assert.equal(model.optimisticTimer(running, 'log', {}, nowMs), null)
-  assert.deepEqual(model.optimisticTimer(null, 'start', {
-    projectId: 8,
-    serviceId: 10,
-    note: 'New work'
-  }, nowMs), {
-    id: 'pending',
-    projectId: 8,
-    serviceId: 10,
-    note: 'New work',
-    running: true,
-    elapsedSeconds: 0,
-    observedAtMs: nowMs,
-    snapshotToken: ''
-  })
-  assert.equal(model.optimisticTimer(running, 'switch', { projectId: 11, serviceId: 12 }, nowMs).projectId, 11)
-})
 
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('10:00'), 36000)

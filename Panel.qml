@@ -25,19 +25,38 @@ Panel {
   property int viewMonth: today.getMonth() + 1
   property string selectedDateKey: localDateKey(today)
   property string calendarCursorDateKey: selectedDateKey
+  readonly property var serviceView: timeTracking && timeTracking.view ? timeTracking.view : ({ records: ({}), actions: ({}), operations: [], conflicts: [], errors: [] })
+  readonly property var records: serviceView.records || ({})
+  readonly property var recordList: {
+    var values = []
+    var scopes = Object.keys(records)
+    for (var i = 0; i < scopes.length; i++) {
+      var record = records[scopes[i]]
+      if (record && record.exists !== false) values.push(record)
+    }
+    return values
+  }
+  readonly property var timers: recordList.filter(function(record) { return record.kind === "active-timer" })
+  readonly property var entries: recordList.filter(function(record) { return record.kind === "time-entry" })
+  readonly property var activeTimer: Model.selectedTimer(timers, timeTracking ? timeTracking.selectedTimerId : "")
+  readonly property string timerMode: Model.timerMode(timers)
+  readonly property var conflicts: Array.isArray(serviceView.conflicts) ? serviceView.conflicts : []
+  readonly property var totals: Model.aggregateEntries(entries)
+  readonly property var operations: Array.isArray(serviceView.operations) ? serviceView.operations : []
+  readonly property var errors: Array.isArray(serviceView.errors) ? serviceView.errors : []
   readonly property string todayDateKey: timeTracking && String((timeTracking.diagnostics || {}).localDate || "") !== ""
     ? String(timeTracking.diagnostics.localDate) : localDateKey(today)
   readonly property var monthCells: Model.calendarMonth(viewYear, viewMonth)
-  readonly property var dayEntries: timeTracking ? Model.entriesForDay(timeTracking.entries, selectedDateKey) : []
+  readonly property var dayEntries: Model.entriesForDay(entries, selectedDateKey)
   readonly property var orderedProjects: timeTracking
-    ? Model.recentProjectOrder(timeTracking.projects, timeTracking.recentEntries, timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "")
+    ? Model.recentProjectOrder(timeTracking.projects, entries, activeTimer ? activeTimer.projectId : "")
     : []
   readonly property var projectShortcuts: timeTracking
     ? Model.searchShortcuts(Model.recentShortcutOrder(
         Model.projectShortcuts(timeTracking.projects),
-        timeTracking.recentEntries,
-        timeTracking.activeTimer ? timeTracking.activeTimer.projectId : "",
-        timeTracking.activeTimer ? timeTracking.activeTimer.serviceId : ""
+        entries,
+        activeTimer ? activeTimer.projectId : "",
+        activeTimer ? activeTimer.serviceId : ""
       ), projectSearch)
     : []
   readonly property var setupDiagnostics: timeTracking ? (timeTracking.diagnostics || {}) : ({})
@@ -51,9 +70,7 @@ Panel {
   property string entryServiceId: ""
   property string entryDateKey: ""
   property string entryOriginalDateKey: ""
-  property bool entryDraftDirty: false
   property bool confirmingDelete: false
-  property string entrySnapshotToken: ""
   onEntryEditorModeChanged: {
     if (entryEditorMode === "closed") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -74,21 +91,9 @@ Panel {
   )
   readonly property color hoverContentColor: hoverContentRole === "background" ? Color.background : foreground
   readonly property string consumerId: "freshbooks-panel-" + String(anchorItem)
-  readonly property bool canMutate: timeTracking && !timeTracking.mutationPending && !timeTracking.outcomeUnknown && !timeTracking.conflictPending
-  readonly property string pendingIntent: timeTracking ? String(timeTracking.pendingIntent || "") : ""
-  readonly property bool timerActionPending: ["start", "pause", "resume", "correctDuration", "updateTimerNote", "log", "switch"].indexOf(pendingIntent) !== -1
-  readonly property bool entryActionPending: ["prepareCreateEntry", "createEntry", "updateEntry", "deleteEntry"].indexOf(pendingIntent) !== -1
-  readonly property string pendingMessage: {
-    if (pendingIntent === "start") return "Starting timer…"
-    if (pendingIntent === "pause") return "Pausing timer…"
-    if (pendingIntent === "resume") return "Resuming timer…"
-    if (pendingIntent === "correctDuration" || pendingIntent === "updateTimerNote") return "Saving timer…"
-    if (pendingIntent === "log") return "Saving time entry…"
-    if (pendingIntent === "switch") return "Switching timers…"
-    if (pendingIntent === "deleteEntry") return "Deleting time entry…"
-    if (entryActionPending) return "Saving time entry…"
-    return ""
-  }
+  readonly property bool timerActionPending: activeTimer && recordStatus(recordScope(activeTimer)) === "settling"
+  readonly property bool entryActionPending: editingEntryId !== "" && recordStatus("time-entry:" + editingEntryId) === "settling"
+  readonly property string pendingMessage: timerActionPending ? "Settling timer…" : (entryActionPending ? "Settling time entry…" : "")
 
   SystemClock {
     id: panelClock
@@ -124,14 +129,12 @@ Panel {
 
   function refresh() {
     if (!timeTracking) return
-    if (timeTracking.outcomeUnknown && timeTracking.retryUnknownRefresh()) return
     var cells = monthCells
     timeTracking.refreshView(tab, cells.length ? cells[0].key : "", cells.length ? cells[cells.length - 1].key : "")
   }
 
   function open() {
     cursorActive = false
-    hydrateDrafts()
     controller.show()
     if (timeTracking) {
       timeTracking.registerVisibleConsumer(consumerId)
@@ -188,12 +191,12 @@ Panel {
       cursorActive = true
       return
     }
-    if (!timeTracking || timeTracking.mutationPending || timeTracking.outcomeUnknown || timeTracking.conflictPending) return
+    if (!timeTracking) return
     if (tab === "timer") {
       if (keyboardCursor === 0) noteField.forceActiveFocus()
       else if (keyboardCursor === 1) durationField.forceActiveFocus()
-      else if (keyboardCursor === 2 && timeTracking.activeTimer) timeTracking.activeTimer.running ? timeTracking.pause() : timeTracking.resume()
-      else if (keyboardCursor === 3 && timeTracking.activeTimer) timeTracking.logTimer()
+      else if (keyboardCursor === 2 && activeTimer && canMutateRecord(activeTimer)) timerRunning(activeTimer) ? timeTracking.pause() : timeTracking.resume()
+      else if (keyboardCursor === 3 && activeTimer && canMutateRecord(activeTimer)) timeTracking.log()
       else if (keyboardCursor === 4) refresh()
     } else if (tab === "projects" && projectShortcuts.length) {
       startShortcut(projectShortcuts[Math.min(keyboardCursor, projectShortcuts.length - 1)])
@@ -225,7 +228,6 @@ Panel {
     if (confirmingDelete) { confirmingDelete = false; return }
     entryEditorMode = "closed"
     editingEntryId = ""
-    if (timeTracking) timeTracking.clearEntryDraft()
   }
 
   function moveMonth(delta) {
@@ -246,96 +248,79 @@ Panel {
     return ""
   }
 
-  function hydrateDrafts() {
-    if (!timeTracking) return
-    var timer = timeTracking.activeTimer
-    if (timer) {
-      var matchingDraft = String(timeTracking.draftTimerId || "") === String(timer.id)
-      noteField.text = matchingDraft && timeTracking.draftTimerNoteDirty ? timeTracking.draftTimerNote : String(timer.note || "")
-      durationField.text = matchingDraft && timeTracking.draftTimerDurationDirty
-        ? timeTracking.draftTimerDuration
-        : Model.formatDuration(Model.logicalTimerElapsedSeconds(timer, panelClock.date.getTime()))
-    } else {
-      noteField.text = ""
-      durationField.text = ""
+  function recordScope(record) {
+    var scopes = Object.keys(records)
+    for (var i = 0; record && i < scopes.length; i++)
+      if (records[scopes[i]] === record) return scopes[i]
+    return record ? String(record.kind || "") + ":" + String(record.id || "") : ""
+  }
+
+  function timerRunning(timer) {
+    return !!timer && timer.state === "running"
+  }
+
+  function canMutateScope(scope) {
+    var action = serviceView.actions && serviceView.actions[String(scope || "")]
+    return !action || action.canMutate !== false
+  }
+
+  function canMutateRecord(record) {
+    return !!record && canMutateScope(recordScope(record))
+  }
+
+  function recordStatus(scope) {
+    var wanted = String(scope || "")
+    for (var i = conflicts.length - 1; i >= 0; i--)
+      if (String(conflicts[i].scope || "") === wanted) return "conflict"
+    for (var j = operations.length - 1; j >= 0; j--) {
+      var operation = operations[j]
+      if (String(operation.scope || "") !== wanted) continue
+      if (operation.state === "unknown") return "unknown"
+      if (["prepared", "in-flight", "rebasing"].indexOf(operation.state) !== -1) return "settling"
+      if (operation.state === "not-applied") return "error"
     }
-    var draft = timeTracking.entryDraft || {}
-    if (String(draft.mode || "") !== "") {
-      if (String(draft.selectedDate || "") !== "") {
-        selectedDateKey = String(draft.selectedDate)
-        var selected = Model.parseDateKey(selectedDateKey)
-        if (selected) { viewYear = selected.year; viewMonth = selected.month }
-      }
-      var storedMode = String(draft.mode)
-      entryEditorMode = storedMode === "new" ? "create" : (storedMode === "create" || storedMode === "edit" ? storedMode : "edit")
-      editingEntryId = entryEditorMode === "edit" ? String(draft.entryId || (storedMode !== "edit" ? storedMode : "")) : ""
-      entryProjectId = String(draft.projectId || "")
-      entryServiceId = String(draft.serviceId || "")
-      entrySnapshotToken = String(draft.snapshotToken || "")
-      entryDateKey = String(draft.entryDate || draft.selectedDate || selectedDateKey)
-      entryOriginalDateKey = String(draft.originalDate || entryDateKey)
-      entryDraftDirty = draft.dirty === true
-      entryDateField.text = entryDateKey
-      entryNoteField.text = String(draft.note || "")
-      entryDurationField.text = String(draft.duration || "")
-    }
+    for (var k = errors.length - 1; k >= 0; k--)
+      if (String(errors[k].scope || "") === wanted) return "error"
+    return ""
   }
 
-  function persistTimerNoteDraft() {
-    if (!timeTracking || !timeTracking.activeTimer) return
-    timeTracking.draftTimerId = String(timeTracking.activeTimer.id)
-    timeTracking.draftTimerSnapshotToken = String(timeTracking.activeTimer.snapshotToken || "")
-    timeTracking.draftTimerNote = noteField.text
-    timeTracking.draftTimerNoteDirty = true
+  function recordStatusLabel(record) {
+    var status = recordStatus(recordScope(record))
+    if (status === "settling") return "Settling…"
+    if (status === "unknown") return "Outcome unknown — checking FreshBooks"
+    if (status === "conflict") return "Needs field choices"
+    if (status === "error") return "Could not save"
+    return ""
   }
 
-  function persistTimerDurationDraft() {
-    if (!timeTracking || !timeTracking.activeTimer) return
-    timeTracking.draftTimerId = String(timeTracking.activeTimer.id)
-    timeTracking.draftTimerSnapshotToken = String(timeTracking.activeTimer.snapshotToken || "")
-    timeTracking.draftTimerDuration = durationField.text
-    timeTracking.draftTimerDurationDirty = true
+  function conflictValue(value) {
+    if (value === null || value === undefined) return "none"
+    return typeof value === "object" ? JSON.stringify(value) : String(value)
   }
 
-  function persistEntryDraft(markDirty) {
-    if (!timeTracking || entryEditorMode === "closed") return
-    if (markDirty === true) entryDraftDirty = true
-    timeTracking.saveEntryDraft({
-      mode: entryEditorMode,
-      entryId: editingEntryId,
-      projectId: entryProjectId,
-      serviceId: entryServiceId,
-      snapshotToken: entrySnapshotToken,
-      note: entryNoteField.text,
-      duration: entryDurationField.text,
-      selectedDate: selectedDateKey,
-      entryDate: entryDateKey,
-      originalDate: entryOriginalDateKey,
-      dirty: entryDraftDirty
-    })
-  }
 
   function startProject(project) {
     if (!timeTracking) return
     var serviceId = projectServiceId(project)
-    if (timeTracking.activeTimer) timeTracking.switchTimer(project.id, serviceId)
-    else timeTracking.start(project.id, serviceId, "")
+    if (activeTimer && canMutateRecord(activeTimer)) timeTracking.switchTimer(project.id, serviceId)
+    else if (!activeTimer) timeTracking.start(project.id, serviceId, "")
   }
 
   function startShortcut(shortcut) {
-    if (!timeTracking || !shortcut || !canMutate) return
-    var active = timeTracking.activeTimer
+    if (!timeTracking || !shortcut) return
+    var active = activeTimer
+    if (active && !canMutateRecord(active)) return
     var sameShortcut = active && String(active.projectId) === String(shortcut.projectId)
       && String(active.serviceId) === String(shortcut.serviceId)
     if (sameShortcut) {
-      if (active.running) timeTracking.pause()
+      if (timerRunning(active)) timeTracking.pause()
       else timeTracking.resume()
     } else if (active) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
     else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
   }
 
   function entryMatchesTimer(entry) {
-    var timer = timeTracking ? timeTracking.activeTimer : null
+    var timer = activeTimer
     return !!(entry && timer
       && String(entry.projectId) === String(timer.projectId)
       && String(entry.serviceId || "") === String(timer.serviceId || "")
@@ -343,11 +328,11 @@ Panel {
   }
 
   function resumeEntry(entry) {
-    if (!canMutate || !entry) return
+    if (!entry || (activeTimer && !canMutateRecord(activeTimer))) return
     if (entryMatchesTimer(entry)) {
-      if (timeTracking.activeTimer.running) timeTracking.pause()
+      if (timerRunning(activeTimer)) timeTracking.pause()
       else timeTracking.resume()
-    } else if (timeTracking.activeTimer) timeTracking.switchTimer(entry.projectId, entry.serviceId, entry.note)
+    } else if (activeTimer) timeTracking.switchTimer(entry.projectId, entry.serviceId, entry.note)
     else timeTracking.start(entry.projectId, entry.serviceId, entry.note)
   }
 
@@ -365,12 +350,10 @@ Panel {
     entryServiceId = projectServiceId(project) === null ? "" : String(projectServiceId(project))
     entryDateKey = selectedDateKey
     entryOriginalDateKey = ""
-    entryDraftDirty = true
     confirmingDelete = false
-    entrySnapshotToken = ""
+    entryDateField.text = entryDateKey
     entryNoteField.text = ""
     entryDurationField.text = "00:00"
-    persistEntryDraft(true)
   }
 
   function beginEditEntry(entry) {
@@ -380,42 +363,31 @@ Panel {
     entryServiceId = String(entry.serviceId === null ? "" : entry.serviceId)
     entryDateKey = String(entry.localDate || selectedDateKey)
     entryOriginalDateKey = entryDateKey
-    entryDraftDirty = false
     confirmingDelete = false
-    entrySnapshotToken = String(entry.snapshotToken || "")
+    entryDateField.text = entryDateKey
     entryNoteField.text = String(entry.note || "")
     entryDurationField.text = Model.formatDuration(entry.durationSeconds || 0)
-    persistEntryDraft(false)
-  }
-
-  function adoptCleanEntryEditor() {
-    if (!timeTracking || entryEditorMode !== "edit" || entryDraftDirty) return
-    for (var i = 0; i < timeTracking.entries.length; i++) {
-      var entry = timeTracking.entries[i]
-      if (String(entry.id) !== String(editingEntryId)) continue
-      entryProjectId = String(entry.projectId === null ? "" : entry.projectId)
-      entryServiceId = String(entry.serviceId === null ? "" : entry.serviceId)
-      entryDateKey = String(entry.localDate || selectedDateKey)
-      entryOriginalDateKey = entryDateKey
-      entrySnapshotToken = String(entry.snapshotToken || "")
-      entryDateField.text = entryDateKey
-      entryNoteField.text = String(entry.note || "")
-      entryDurationField.text = Model.formatDuration(entry.durationSeconds || 0)
-      persistEntryDraft(false)
-      return
-    }
-    entryEditorMode = "closed"
-    editingEntryId = ""
-    timeTracking.clearEntryDraft()
   }
 
   function saveEntry() {
     var seconds = Model.parseDurationInput(entryDurationField.text)
-    if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey) || !timeTracking || !canMutate) return
+    var scope = editingEntryId === "" ? "" : "time-entry:" + editingEntryId
+    if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey)
+        || !timeTracking || (scope !== "" && !canMutateScope(scope))) return
     var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
     if (entryEditorMode === "create" || entryDateKey !== entryOriginalDateKey) fields.localDate = entryDateKey
-    if (entryEditorMode === "create") timeTracking.createEntry(fields)
-    else timeTracking.updateEntry(editingEntryId, fields, entrySnapshotToken)
+    var accepted = entryEditorMode === "create"
+      ? timeTracking.createEntry(fields)
+      : timeTracking.updateEntry(editingEntryId, fields)
+    if (accepted) cancelEntryEditor()
+  }
+
+  function deleteEditedEntry() {
+    if (!timeTracking || editingEntryId === "" || !canMutateScope("time-entry:" + editingEntryId)) return
+    if (timeTracking.deleteEntry(editingEntryId)) {
+      confirmingDelete = false
+      cancelEntryEditor()
+    }
   }
 
   KeyboardPanel {
@@ -631,10 +603,53 @@ Panel {
           }
         }
 
+        Column {
+          id: conflictChoices
+          width: parent.width
+          visible: !root.setupRequired && root.conflicts.length > 0
+              spacing: Style.space(8)
+              Repeater {
+                model: root.conflicts
+                Column {
+                  id: conflictItem
+                  required property var modelData
+                  width: parent.width
+                  spacing: Style.space(6)
+                  Text { text: conflictItem.modelData.deletion ? "FreshBooks deleted this record" : "Choose each conflicting field"; color: Color.urgent; font.family: root.fontFamily; font.bold: true }
+                  Repeater {
+                    model: conflictItem.modelData.groups || []
+                    Flow {
+                      required property var modelData
+                      width: parent.width
+                      spacing: Style.space(6)
+                      Text { text: String(modelData.group || "Field"); color: root.foreground; font.family: root.fontFamily }
+                      Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: "Mine: " + root.conflictValue(modelData.mine)
+                          + " · FreshBooks: " + root.conflictValue(modelData.freshbooks)
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                      ActionButton { label: "Mine"; onTriggered: root.timeTracking.chooseMine(conflictItem.modelData.operationId, modelData.group) }
+                      ActionButton { label: "FreshBooks"; onTriggered: root.timeTracking.chooseFreshBooks(conflictItem.modelData.operationId, modelData.group) }
+                    }
+                  }
+                  Flow {
+                    visible: conflictItem.modelData.deletion === true
+                    width: parent.width
+                    spacing: Style.space(6)
+                    ActionButton { label: "Restore as new"; onTriggered: root.timeTracking.restoreAsNew(conflictItem.modelData.operationId) }
+                    ActionButton { label: "Discard local"; onTriggered: root.timeTracking.discardLocal(conflictItem.modelData.operationId) }
+                  }
+                }
+              }
+            }
         Item {
           visible: !root.setupRequired
           width: parent.width
-          height: parent.height - Style.space(44)
+          height: parent.height - Style.space(44) - (conflictChoices.visible ? conflictChoices.implicitHeight + Style.space(8) : 0)
 
           Column {
             visible: root.tab === "timer"
@@ -643,14 +658,14 @@ Panel {
 
             Column {
               width: parent.width
-              visible: root.timeTracking && root.timeTracking.timerMode === "multiple" && !root.timeTracking.activeTimer
+              visible: root.timerMode === "multiple" && !root.activeTimer
               spacing: Style.space(4)
               Text { text: "Choose the FreshBooks timer to manage"; color: Color.urgent; font.family: root.fontFamily; font.bold: true }
               Repeater {
-                model: root.timeTracking ? root.timeTracking.timers : []
+                model: root.timers
                 ActionButton {
                   required property var modelData
-                  label: Model.formatDuration(Model.logicalTimerElapsedSeconds(modelData, panelClock.date.getTime())) + "  " + String(modelData.note || "Untitled timer")
+                  label: Model.formatDuration(Model.projectElapsedSeconds(modelData, panelClock.date.getTime())) + "  " + String(modelData.note || "Untitled timer")
                   onTriggered: root.timeTracking.selectTimer(modelData.id)
                 }
               }
@@ -669,21 +684,21 @@ Panel {
                 id: timerHero
                 width: parent.width
                 title: {
-                  if (!root.timeTracking || !root.timeTracking.activeTimer) return "No active timer"
-                  var project = root.projectById(root.timeTracking.activeTimer.projectId)
+                  if (!root.activeTimer) return "No active timer"
+                  var project = root.projectById(root.activeTimer.projectId)
                   return project ? String(project.title || "Project") : "Active timer"
                 }
                 meta: {
-                  if (!root.timeTracking || !root.timeTracking.activeTimer) return "Choose a project to begin"
-                  var project = root.projectById(root.timeTracking.activeTimer.projectId)
+                  if (!root.activeTimer) return "Choose a project to begin"
+                  var project = root.projectById(root.activeTimer.projectId)
                   if (!project) return "FreshBooks timer"
                   var client = String(project.clientName || "Internal")
-                  var service = root.serviceName(project, root.timeTracking.activeTimer.serviceId)
+                  var service = root.serviceName(project, root.activeTimer.serviceId)
                   return client + (service === "" ? "" : " · " + service)
                 }
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                iconOpacity: root.timeTracking && root.timeTracking.activeTimer ? 1 : 0.5
+                iconOpacity: root.activeTimer ? 1 : 0.5
                 iconComponent: Component {
                   Text {
                     textFormat: Text.PlainText
@@ -716,27 +731,31 @@ Panel {
             TextField {
               id: noteField
               width: parent.width
-              enabled: root.timeTracking && root.timeTracking.activeTimer
+              enabled: root.activeTimer && root.canMutateRecord(root.activeTimer)
               placeholderText: "Notes"
-              onTextEdited: root.persistTimerNoteDraft()
-              onEditingFinished: if (root.timeTracking && enabled && !root.timeTracking.mutationPending && text !== String(root.timeTracking.activeTimer.note || "")) root.timeTracking.updateTimerNote(text)
+              onActiveFocusChanged: if (activeFocus && root.activeTimer) text = String(root.activeTimer.note || "")
+              onEditingFinished: {
+                if (!root.activeTimer || !root.canMutateRecord(root.activeTimer)) return
+                if (text !== String(root.activeTimer.note || "") && root.timeTracking.updateNote(text)) focus = false
+              }
+              Binding { target: noteField; property: "text"; when: !noteField.activeFocus; value: root.activeTimer ? String(root.activeTimer.note || "") : "" }
             }
             TextField {
               id: durationField
               width: parent.width
-              enabled: root.timeTracking && root.timeTracking.activeTimer
+              enabled: root.activeTimer && root.canMutateRecord(root.activeTimer)
               placeholderText: "HH:MM or HH:MM:SS"
-              onTextEdited: root.persistTimerDurationDraft()
               onEditingFinished: {
                 var seconds = Model.parseDurationInput(text)
-                if (seconds !== null && root.timeTracking && root.timeTracking.draftTimerDurationDirty && !root.timeTracking.mutationPending) root.timeTracking.correctDuration(seconds)
-                else if (root.timeTracking && root.timeTracking.activeTimer) text = Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
+                if (seconds !== null && root.activeTimer && root.canMutateRecord(root.activeTimer)
+                    && root.timeTracking.correctDuration(seconds)) focus = false
               }
+              Binding { target: durationField; property: "text"; when: !durationField.activeFocus; value: root.activeTimer ? Model.formatDuration(Model.projectElapsedSeconds(root.activeTimer, panelClock.date.getTime())) : "" }
             }
             Text {
-              visible: root.timerActionPending
-              text: root.pendingMessage
-              color: Qt.darker(root.foreground, 1.25)
+              visible: text !== ""
+              text: root.activeTimer ? root.recordStatusLabel(root.activeTimer) : ""
+              color: text === "Could not save" || text === "Needs field choices" ? Color.urgent : Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
               horizontalAlignment: Text.AlignHCenter
               width: parent.width
@@ -749,34 +768,33 @@ Panel {
                 cursorIndex: 2
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 2
                 label: ""
-                tooltipText: root.pendingIntent === "pause" ? "Pausing timer"
-                  : (root.pendingIntent === "resume" ? "Resuming timer"
-                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "Pause timer" : "Resume timer"))
+                tooltipText: root.timerActionPending ? "Settling timer"
+                  : (root.timerRunning(root.activeTimer) ? "Pause timer" : "Resume timer")
                 active: true
                 implicitWidth: Style.space(58)
                 implicitHeight: Style.space(38)
-                opacity: (enabled || root.pendingIntent === "pause" || root.pendingIntent === "resume") ? 1 : 0.45
-                enabled: root.canMutate && root.timeTracking.activeTimer
+                opacity: enabled || root.timerActionPending ? 1 : 0.45
+                enabled: root.activeTimer && root.canMutateRecord(root.activeTimer)
                 onTriggered: {
-                  if (root.timeTracking.activeTimer.running) root.timeTracking.pause()
+                  if (root.timerRunning(root.activeTimer)) root.timeTracking.pause()
                   else root.timeTracking.resume()
                 }
                 Text {
                   id: timerToggleGlyph
                   anchors.centerIn: parent
                   textFormat: Text.PlainText
-                  text: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? "󰦖"
-                    : (root.timeTracking && root.timeTracking.activeTimer && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊")
+                  text: root.timerActionPending ? "󰦖"
+                    : (root.timerRunning(root.activeTimer) ? "󰏤" : "󰐊")
                   color: timerToggleButton.hot ? root.hoverContentColor : root.selectedContentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.title
-                  rotation: root.pendingIntent === "pause" || root.pendingIntent === "resume" ? 0 : 0
+                  rotation: root.timerActionPending ? 0 : 0
                   RotationAnimation on rotation {
                     from: 0
                     to: 360
                     duration: 900
                     loops: Animation.Infinite
-                    running: root.pendingIntent === "pause" || root.pendingIntent === "resume"
+                    running: root.timerActionPending
                   }
                 }
               }
@@ -784,14 +802,14 @@ Panel {
                 id: timerSaveButton
                 cursorIndex: 3
                 hasCursor: root.cursorActive && root.tab === "timer" && root.keyboardCursor === 3
-                label: root.pendingIntent === "log" ? "" : "Save"
-                iconText: root.pendingIntent === "log" ? "󰦖" : ""
-                iconSpinning: root.pendingIntent === "log"
-                tooltipText: root.pendingIntent === "log" ? "Saving time entry" : "Save timer as time entry"
+                label: root.timerActionPending ? "" : "Save"
+                iconText: root.timerActionPending ? "󰦖" : ""
+                iconSpinning: root.timerActionPending
+                tooltipText: root.timerActionPending ? "Settling timer" : "Save timer as time entry"
                 implicitWidth: timerToggleButton.implicitWidth
                 implicitHeight: timerToggleButton.implicitHeight
-                enabled: root.canMutate && root.timeTracking.activeTimer
-                onTriggered: root.timeTracking.logTimer()
+                enabled: root.activeTimer && root.canMutateRecord(root.activeTimer)
+                onTriggered: root.timeTracking.log()
               }
             }
             Text {
@@ -801,23 +819,6 @@ Panel {
               text: root.timeTracking ? root.timeTracking.lastError : ""
               color: Color.urgent
               font.family: root.fontFamily
-            }
-            Row {
-              visible: root.timeTracking && root.timeTracking.conflictPending
-              spacing: Style.space(8)
-              ActionButton {
-                label: "Reload"
-                onTriggered: {
-                  root.timeTracking.resolveConflictReload()
-                  Qt.callLater(function() {
-                    if (root.timeTracking.activeTimer) {
-                      noteField.text = String(root.timeTracking.activeTimer.note || "")
-                      durationField.text = Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime()))
-                    }
-                  })
-                }
-              }
-              ActionButton { label: "Apply mine"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
             }
           }
 
@@ -859,9 +860,9 @@ Panel {
                     width: projectColumn.width
                     height: Style.space(58)
                     hasCursor: root.cursorActive && root.tab === "projects" && root.keyboardCursor === index
-                    current: root.timeTracking && root.timeTracking.activeTimer
-                      && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
-                      && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
+                    current: root.activeTimer
+                      && String(root.activeTimer.projectId) === String(modelData.projectId)
+                      && String(root.activeTimer.serviceId) === String(modelData.serviceId)
                     foreground: root.foreground
                     accent: Color.accent
                     MouseArea {
@@ -871,7 +872,7 @@ Panel {
                       anchors.bottom: parent.bottom
                       anchors.right: projectAction.left
                       hoverEnabled: true
-                      enabled: root.canMutate
+                      enabled: !root.activeTimer || root.canMutateRecord(root.activeTimer)
                       cursorShape: Qt.PointingHandCursor
                       onContainsMouseChanged: {
                         if (!containsMouse) return
@@ -911,22 +912,20 @@ Panel {
                     PanelActionButton {
                       id: projectAction
                       readonly property bool pending: root.timerActionPending
-                        && String((root.timeTracking.pendingPayload || {}).projectId || "") === String(modelData.projectId)
-                        && String((root.timeTracking.pendingPayload || {}).serviceId || "") === String(modelData.serviceId)
                       anchors.right: parent.right
                       anchors.rightMargin: Style.space(6)
                       anchors.verticalCenter: parent.verticalCenter
                       iconText: pending ? "󰦖"
-                        : (root.timeTracking && root.timeTracking.activeTimer
-                          && String(root.timeTracking.activeTimer.projectId) === String(modelData.projectId)
-                          && String(root.timeTracking.activeTimer.serviceId) === String(modelData.serviceId)
-                          && root.timeTracking.activeTimer.running ? "󰏤" : "󰐊")
+                        : (root.activeTimer
+                          && String(root.activeTimer.projectId) === String(modelData.projectId)
+                          && String(root.activeTimer.serviceId) === String(modelData.serviceId)
+                          && root.timerRunning(root.activeTimer) ? "󰏤" : "󰐊")
                       tooltipText: pending ? root.pendingMessage : (iconText === "󰏤" ? "Pause timer" : "Start timer")
                       foreground: projectRow.contentColor
                       hoverColor: projectRow.contentColor
                       fontFamily: root.fontFamily
                       fontSize: Style.font.title
-                      enabled: root.canMutate
+                      enabled: !root.activeTimer || root.canMutateRecord(root.activeTimer)
                       rotation: pending ? 0 : 0
                       RotationAnimation on rotation {
                         from: 0
@@ -966,11 +965,11 @@ Panel {
               spacing: Style.space(8)
               Text {
               width: parent.width
-              visible: root.pendingMessage !== "" || (root.timeTracking && root.timeTracking.activeTimer)
+              visible: root.pendingMessage !== "" || root.activeTimer
               text: {
                 if (root.pendingMessage !== "") return root.pendingMessage
-                return root.timeTracking && root.timeTracking.activeTimer
-                  ? "Active timer · " + Model.formatDuration(Model.logicalTimerElapsedSeconds(root.timeTracking.activeTimer, panelClock.date.getTime())) + " · not included in totals"
+                return root.activeTimer
+                  ? "Active timer · " + Model.formatDuration(Model.projectElapsedSeconds(root.activeTimer, panelClock.date.getTime())) + " · not included in totals"
                   : ""
               }
               color: Color.accent
@@ -1031,8 +1030,8 @@ Panel {
                   foreground: root.foreground
                   accent: Color.accent
                   Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 4; text: modelData.day; color: dayCell.current || dayCell.hasCursor ? dayCell.contentColor : (modelData.inMonth ? root.foreground : Qt.darker(root.foreground, 1.7)); font.family: root.fontFamily }
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: root.timeTracking ? Model.formatHoursMinutes((root.timeTracking.state.totals.byDay || {})[modelData.key] || 0) : ""; color: dayCell.contentColor; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-                  Rectangle { visible: root.timeTracking && Model.entriesForDay(root.timeTracking.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: dayCell.contentColor; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 3; text: Model.formatHoursMinutes((root.totals.byDay || {})[modelData.key] || 0); color: dayCell.contentColor; opacity: text === "00:00" ? 0 : 0.7; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                  Rectangle { visible: Model.entriesForDay(root.entries, modelData.key).length > 0; width: 4; height: 4; radius: 2; color: dayCell.contentColor; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4 }
                   MouseArea {
                     anchors.fill: parent
                     hoverEnabled: true
@@ -1055,7 +1054,7 @@ Panel {
             }
             Row {
               width: parent.width
-              Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.timeTracking ? root.timeTracking.entries : [], root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
+              Text { width: parent.width - addEntryButton.width; anchors.verticalCenter: parent.verticalCenter; text: root.selectedDateKey + " · " + Model.formatDuration(Model.reportingWeekTotal(root.entries, root.selectedDateKey)) + " this week"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
               ActionButton { id: addEntryButton; cursorIndex: 0; hasCursor: root.cursorActive && root.tab === "calendar" && !root.calendarGridFocused && root.keyboardCursor === 0; label: "+ Entry"; calendarListTarget: true; onTriggered: root.beginAddEntry() }
             }
             Column {
@@ -1070,7 +1069,7 @@ Panel {
                   required property int index
                   readonly property color contentColor: hasCursor ? root.hoverContentColor : root.foreground
                   readonly property var project: root.projectById(modelData.projectId)
-                  readonly property bool running: root.entryMatchesTimer(modelData) && root.timeTracking.activeTimer.running
+                  readonly property bool running: root.entryMatchesTimer(modelData) && root.timerRunning(root.activeTimer)
                   width: entryColumn.width
                   height: Math.max(entryDetails.implicitHeight + Style.space(16), resumeEntryButton.height)
                   hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === index * 2 + 1
@@ -1108,6 +1107,14 @@ Panel {
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
                     }
+                    Text {
+                      width: parent.width
+                      visible: text !== ""
+                      text: root.recordStatusLabel(entryRow.modelData)
+                      color: text === "Could not save" || text === "Needs field choices" ? Color.urgent : Color.accent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
                   }
                   Text { id: entryDuration; anchors.right: resumeEntryButton.left; anchors.rightMargin: Style.space(10); anchors.verticalCenter: parent.verticalCenter; text: Model.formatDuration(modelData.durationSeconds !== undefined ? modelData.durationSeconds : modelData.duration || 0); color: entryRow.contentColor; font.family: root.fontFamily }
                   MouseArea {
@@ -1133,7 +1140,7 @@ Panel {
                     tooltipText: entryRow.running ? "Stop timer" : "Resume timer"
                     implicitWidth: Style.space(38)
                     implicitHeight: Style.space(38)
-                    enabled: root.canMutate
+                    enabled: !root.activeTimer || root.canMutateRecord(root.activeTimer)
                     cursorIndex: entryRow.index * 2 + 2
                     calendarListTarget: true
                     hasCursor: root.cursorActive && !root.calendarGridFocused && root.keyboardCursor === cursorIndex
@@ -1184,9 +1191,9 @@ Panel {
             width: entryEditorViewport.width
             spacing: Style.space(7)
             Text { text: root.entryEditorMode === "create" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-            TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; text: root.entryDateKey; onTextEdited: { root.entryDateKey = text; root.persistEntryDraft(true) } }
-            TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.persistEntryDraft(true) }
-            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.persistEntryDraft(true); onAccepted: root.saveEntry() }
+            TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; onTextEdited: root.entryDateKey = text }
+            TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes" }
+            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onAccepted: root.saveEntry() }
             PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
             SearchableDropdown {
               id: entryProjectPicker
@@ -1221,7 +1228,6 @@ Panel {
                 var selection = JSON.parse(value)
                 root.entryProjectId = selection[0]
                 root.entryServiceId = selection[1]
-                root.persistEntryDraft(true)
               }
               Binding {
                 target: entryProjectPicker
@@ -1242,7 +1248,9 @@ Panel {
             Text {
               width: parent.width
               visible: text !== ""
-              text: root.timeTracking ? String(root.timeTracking.lastError || "") : ""
+              text: root.entryEditorMode === "edit"
+                ? root.recordStatusLabel({ kind: "time-entry", id: root.editingEntryId })
+                : ""
               color: Color.urgent
               font.family: root.fontFamily
               wrapMode: Text.Wrap
@@ -1251,35 +1259,23 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
               ActionButton {
-                label: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "Saving…" : "Save"
-                iconText: root.entryActionPending && root.pendingIntent !== "deleteEntry" ? "󰦖" : ""
-                iconSpinning: root.entryActionPending && root.pendingIntent !== "deleteEntry"
-                enabled: root.canMutate && Model.parseDurationInput(entryDurationField.text) !== null && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
+                label: "Save"
+                enabled: (root.entryEditorMode === "create" || root.canMutateScope("time-entry:" + root.editingEntryId))
+                  && Model.parseDurationInput(entryDurationField.text) !== null
+                  && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
                 onTriggered: root.saveEntry()
               }
               ActionButton { label: "Cancel"; onTriggered: root.cancelEntryEditor() }
               ActionButton {
                 id: deleteEntryButton
                 visible: root.entryEditorMode === "edit"
-                enabled: root.canMutate
-                label: root.pendingIntent === "deleteEntry" ? "Deleting…" : (root.confirmingDelete ? "Delete now" : "Delete")
-                iconText: root.pendingIntent === "deleteEntry" ? "󰦖" : ""
-                iconSpinning: root.pendingIntent === "deleteEntry"
+                enabled: root.canMutateScope("time-entry:" + root.editingEntryId)
+                label: root.confirmingDelete ? "Delete now" : "Delete"
                 onTriggered: {
                   if (!root.confirmingDelete) root.confirmingDelete = true
-                  else {
-                    root.timeTracking.deleteEntry(root.editingEntryId, root.entrySnapshotToken)
-                    root.confirmingDelete = false
-                  }
+                  else root.deleteEditedEntry()
                 }
               }
-            }
-            Flow {
-              width: parent.width
-              visible: root.timeTracking && root.timeTracking.conflictPending
-              spacing: Style.space(8)
-              ActionButton { label: "Reload remote entry"; onTriggered: root.timeTracking.resolveConflictReload() }
-              ActionButton { label: "Apply my entry"; onTriggered: root.timeTracking.resolveConflictApplyMine() }
             }
           }
         }
@@ -1316,14 +1312,6 @@ Panel {
   Connections {
     target: root.timeTracking
     ignoreUnknownSignals: true
-    function onActiveTimerChanged() { root.hydrateDrafts() }
-    function onEntryDraftChanged() {
-      if (!root.timeTracking || String((root.timeTracking.entryDraft || {}).mode || "") !== "") return
-      root.entryEditorMode = "closed"
-      root.editingEntryId = ""
-      root.confirmingDelete = false
-    }
-    function onEntriesChanged() { root.adoptCleanEntryEditor() }
     function onDiagnosticsChanged() {
       var localToday = String((root.timeTracking.diagnostics || {}).localDate || "")
       if (localToday === "") return
@@ -1336,10 +1324,5 @@ Panel {
         root.viewMonth = local.month
       }
     }
-    function onDraftTimerDurationDirtyChanged() {
-      if (root.timeTracking && !root.timeTracking.draftTimerDurationDirty) root.hydrateDrafts()
-    }
   }
-
-  Component.onCompleted: Qt.callLater(function() { root.hydrateDrafts() })
 }

@@ -185,17 +185,6 @@ function selectedTimer(timers, selectedId) {
   return values.length === 1 ? values[0] : null
 }
 
-function recordSnapshotChanged(records, recordId, snapshotToken) {
-  var wantedId = String(recordId === undefined || recordId === null ? "" : recordId)
-  var baseline = String(snapshotToken || "")
-  if (wantedId === "" || baseline === "") return false
-  var values = asArray(records)
-  for (var i = 0; i < values.length; i++) {
-    var record = values[i] || {}
-    if (String(record.id) === wantedId) return String(record.snapshotToken || "") !== baseline
-  }
-  return true
-}
 
 function stateProjection(snapshot, selectedTimerId) {
   var source = snapshot && typeof snapshot === "object" ? snapshot : {}
@@ -227,6 +216,17 @@ function elapsedSeconds(timer, nowMs) {
   if (!isFinite(observedAt)) return confirmed
   var now = finiteNumber(nowMs, observedAt)
   return confirmed + Math.max(0, Math.floor((now - observedAt) / 1000))
+}
+
+function projectElapsedSeconds(timer, nowMs) {
+  if (!timer) return 0
+  var anchor = timer.elapsedAnchor && typeof timer.elapsedAnchor === "object" ? timer.elapsedAnchor : {}
+  var closed = integerSeconds(anchor.closedSeconds)
+  if (anchor.runningStartedAt === null || anchor.runningStartedAt === undefined || anchor.runningStartedAt === "") return closed
+  var startedAt = Date.parse(String(anchor.runningStartedAt))
+  if (!isFinite(startedAt)) return closed
+  var now = finiteNumber(nowMs, startedAt)
+  return closed + Math.max(0, Math.floor((now - startedAt) / 1000))
 }
 
 function logicalTimerElapsedSeconds(timer, nowMs) {
@@ -275,45 +275,6 @@ function formatTimerLabel(seconds) {
   return hours + ":" + pad2(minutes) + ":" + pad2(remainder)
 }
 
-function optimisticTimer(timer, intent, payload, nowMs) {
-  var action = String(intent || "")
-  var values = payload && typeof payload === "object" ? payload : {}
-  var observedAt = finiteNumber(nowMs, Date.now())
-
-  if (action === "log") return null
-  if (action === "start" || action === "switch") {
-    return {
-      id: "pending",
-      projectId: values.projectId,
-      serviceId: values.serviceId,
-      note: String(values.note || ""),
-      running: true,
-      elapsedSeconds: 0,
-      observedAtMs: observedAt,
-      snapshotToken: ""
-    }
-  }
-  if (!timer) return null
-
-  var result = {}
-  for (var key in timer) result[key] = timer[key]
-  result.elapsedSeconds = logicalTimerElapsedSeconds(timer, observedAt)
-  result.observedAtMs = observedAt
-  if (action === "pause") {
-    result.running = false
-    if (Array.isArray(result.segments)) result.segments = []
-  }
-  else if (action === "resume") {
-    result.running = true
-    if (Array.isArray(result.segments)) result.segments = []
-  }
-  else if (action === "correctDuration") {
-    result.elapsedSeconds = integerSeconds(values.durationSeconds)
-    if (Array.isArray(result.segments)) result.segments = []
-  }
-  else if (action === "updateTimerNote") result.note = String(values.note || "")
-  return result
-}
 
 function formatHoursMinutes(seconds) {
   var totalMinutes = Math.floor(integerSeconds(seconds) / 60)
@@ -467,15 +428,14 @@ if (typeof module !== "undefined") module.exports = {
   formatHoursMinutes: formatHoursMinutes,
   formatTimerLabel: formatTimerLabel,
   logicalTimerElapsedSeconds: logicalTimerElapsedSeconds,
-  optimisticTimer: optimisticTimer,
   parseDurationInput: parseDurationInput,
+  projectElapsedSeconds: projectElapsedSeconds,
   projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
   recentShortcutOrder: recentShortcutOrder,
   readableContentRole: readableContentRole,
-  recordSnapshotChanged: recordSnapshotChanged,
   searchProjects: searchProjects,
   searchShortcuts: searchShortcuts,
   reportingWeekTotal: reportingWeekTotal,

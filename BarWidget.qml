@@ -11,15 +11,25 @@ BarWidget {
   moduleName: "kmorey.freshbooks-time"
 
   readonly property var timeTracking: ServiceAccess.serviceFor(bar ? bar.shell : null, moduleName)
-  readonly property var activeTimer: timeTracking ? timeTracking.activeTimer : null
-  readonly property string timerMode: timeTracking ? timeTracking.timerMode : "none"
+  readonly property var serviceView: timeTracking && timeTracking.view ? timeTracking.view : ({ records: ({}) })
+  readonly property var timers: {
+    var values = []
+    var records = serviceView.records || ({})
+    var scopes = Object.keys(records)
+    for (var i = 0; i < scopes.length; i++)
+      if (records[scopes[i]] && records[scopes[i]].exists !== false && records[scopes[i]].kind === "active-timer")
+        values.push(records[scopes[i]])
+    return values
+  }
+  readonly property var activeTimer: Model.selectedTimer(timers, timeTracking ? timeTracking.selectedTimerId : "")
+  readonly property string timerMode: Model.timerMode(timers)
   readonly property string iconGlyph: "󰔛"
-  readonly property string uiRevision: "searchable-project-service-v2"
+  readonly property string uiRevision: "immutable-settlement-view-v1"
   readonly property string label: {
     if (!timeTracking) return ""
     if (timerMode === "multiple") return "Choose timer"
     if (!activeTimer) return ""
-    return Model.formatTimerLabel(Model.logicalTimerElapsedSeconds(activeTimer, clock.date.getTime()))
+    return Model.formatTimerLabel(Model.projectElapsedSeconds(activeTimer, clock.date.getTime()))
   }
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
@@ -43,7 +53,7 @@ BarWidget {
       uiRevision: root.uiRevision,
       selectedContentRole: panelLoader.item ? String(panelLoader.item.selectedContentRole || "") : "unavailable",
       timerMode: root.timerMode,
-      running: root.activeTimer ? root.activeTimer.running === true : false,
+      running: root.activeTimer ? root.activeTimer.state === "running" : false,
       busy: root.timeTracking ? root.timeTracking.busy === true : false,
       refreshing: root.timeTracking ? root.timeTracking.refreshing === true : false,
       pendingIntent: root.timeTracking ? String(root.timeTracking.pendingIntent || "") : "",
