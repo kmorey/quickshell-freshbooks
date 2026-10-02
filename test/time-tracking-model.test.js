@@ -133,6 +133,25 @@ test('omits a zero hour from the bar timer label', () => {
 })
 
 
+test('builds entry update fields only for dirty field groups', () => {
+  const draft = {
+    localDate: '2026-09-03',
+    durationSeconds: 5400,
+    projectId: '44',
+    serviceId: '66',
+    note: 'Changed locally'
+  }
+
+  assert.deepEqual(model.entryUpdateFields(draft, { note: true }), {
+    note: 'Changed locally'
+  })
+  assert.deepEqual(model.entryUpdateFields(draft, { assignment: true, duration: true }), {
+    durationSeconds: 5400,
+    projectId: '44',
+    serviceId: '66'
+  })
+})
+
 test('parses explicit HH:MM and HH:MM:SS duration input', () => {
   assert.equal(model.parseDurationInput('10:00'), 36000)
   assert.equal(model.parseDurationInput('00:01:30'), 90)

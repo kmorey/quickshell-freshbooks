@@ -1,3 +1,18 @@
+function immutableCopy(value) {
+  if (Array.isArray(value)) {
+    var items = []
+    for (var i = 0; i < value.length; i++) items.push(immutableCopy(value[i]))
+    return Object.freeze(items)
+  }
+  if (value && typeof value === "object") {
+    var copy = {}
+    var keys = Object.keys(value)
+    for (var j = 0; j < keys.length; j++) copy[keys[j]] = immutableCopy(value[keys[j]])
+    return Object.freeze(copy)
+  }
+  return value
+}
+
 function createServiceRuntime(options) {
   options = options || {}
   var Ledger = options.Ledger
@@ -9,13 +24,25 @@ function createServiceRuntime(options) {
 
   var ledgerState = Ledger.initialState()
   var coordinatorState = Coordinator.initialState(options.budgets)
-  var view = Ledger.apply(ledgerState, {}).view
+  var ledgerView = Ledger.apply(ledgerState, {}).view
+  var projects = Object.freeze([])
+  var view
   var actions = []
   var startedRequests = {}
   var refreshSequence = 0
   var activePersistId = null
   var pendingPersists = []
 
+
+  function publishView() {
+    var next = {}
+    var keys = Object.keys(ledgerView)
+    for (var i = 0; i < keys.length; i++) next[keys[i]] = ledgerView[keys[i]]
+    next.projects = projects
+    view = Object.freeze(next)
+  }
+
+  publishView()
   function queuePersist(effect) {
     var action = {
       type: "persist",
@@ -77,7 +104,8 @@ function createServiceRuntime(options) {
   function applyLedger(event) {
     var result = Ledger.apply(ledgerState, event)
     ledgerState = result.state
-    view = result.view
+    ledgerView = result.view
+    publishView()
     drainEffects(result.effects || [])
     return result
   }
@@ -125,6 +153,10 @@ function createServiceRuntime(options) {
         }
         if (action.data !== undefined) metadata.data = action.data
         if (action.error !== undefined) metadata.error = action.error
+        if (action.outcome === "observation" && action.request.responseKind === "project-list") {
+          projects = immutableCopy(Array.isArray(action.data) ? action.data : [])
+          publishView()
+        }
       } else {
         applyLedger(completionEvent(action))
       }
@@ -175,9 +207,11 @@ function createServiceRuntime(options) {
       startedRequests = {}
       activePersistId = null
       pendingPersists = []
+      projects = Object.freeze([])
       var result = Ledger.apply(ledgerState, { type: "startup" })
       ledgerState = result.state
-      view = result.view
+      ledgerView = result.view
+      publishView()
       drainEffects(result.effects || [])
     },
 

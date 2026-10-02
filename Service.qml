@@ -17,7 +17,6 @@ Item {
 
   property var view: runtime.getView()
   property var diagnostics: ({})
-  property var projects: []
   property var businesses: []
   property string authorizationUrl: ""
   property string selectedTimerId: ""
@@ -51,7 +50,7 @@ Item {
   readonly property var recentEntries: entries
   readonly property string timerMode: Model.timerMode(timers)
   readonly property var activeTimer: Model.selectedTimer(timers, selectedTimerId)
-  readonly property var state: Model.stateProjection({ timers: timers, projects: projects, entries: entries }, selectedTimerId)
+  readonly property var state: Model.stateProjection({ timers: timers, projects: view.projects || [], entries: entries }, selectedTimerId)
   readonly property bool mutationPending: {
     var operations = view && Array.isArray(view.operations) ? view.operations : []
     for (var i = 0; i < operations.length; i++)
@@ -385,7 +384,6 @@ Item {
     var data = completion.data
     if (completion.outcome === "observation") {
       if (kind === "diagnostics" && data) diagnostics = data
-      else if (kind === "project-list") projects = data
       else if (kind === "business-list") businesses = data
       else if (kind === "auth-url") authorizationUrl = String(data && data.url || "")
       else if (kind === "auth-configured") {

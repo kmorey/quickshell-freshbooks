@@ -275,6 +275,9 @@ test('runtime mediates metadata and rejects stale or canceled deliveries', () =>
     outcome: 'observation',
     data: [{ id: 44, title: 'Build' }]
   })
+  assert.deepEqual(service.getView().projects, [{ id: 44, title: 'Build' }])
+  assert.equal(Object.isFrozen(service.getView().projects), true)
+  assert.equal(Object.isFrozen(service.getView().projects[0]), true)
 
   service.submitIntent({
     type: 'refresh', requestKind: 'quiet-read', queryKey: 'businesses',

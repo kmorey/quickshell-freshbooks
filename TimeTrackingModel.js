@@ -293,6 +293,20 @@ function parseDurationInput(value) {
   return hours * 3600 + minutes * 60 + seconds
 }
 
+function entryUpdateFields(draft, dirtyGroups) {
+  var values = draft && typeof draft === "object" ? draft : {}
+  var dirty = dirtyGroups && typeof dirtyGroups === "object" ? dirtyGroups : {}
+  var fields = {}
+  if (dirty.note === true) fields.note = String(values.note || "")
+  if (dirty.duration === true) fields.durationSeconds = integerSeconds(values.durationSeconds)
+  if (dirty.date === true) fields.localDate = String(values.localDate || "")
+  if (dirty.assignment === true) {
+    fields.projectId = values.projectId
+    fields.serviceId = values.serviceId
+  }
+  return fields
+}
+
 function entriesForDay(entries, key) {
   return asArray(entries).filter(function(entry) { return entryDateKey(entry) === key }).sort(function(a, b) {
     return Date.parse(String(a.startedAt || a.started_at || "")) - Date.parse(String(b.startedAt || b.started_at || ""))
@@ -424,6 +438,7 @@ if (typeof module !== "undefined") module.exports = {
   dateKey: dateKey,
   elapsedSeconds: elapsedSeconds,
   entryDateKey: entryDateKey,
+  entryUpdateFields: entryUpdateFields,
   formatDuration: formatDuration,
   formatHoursMinutes: formatHoursMinutes,
   formatTimerLabel: formatTimerLabel,

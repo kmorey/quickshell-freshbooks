@@ -27,6 +27,7 @@ Panel {
   property string calendarCursorDateKey: selectedDateKey
   readonly property var serviceView: timeTracking && timeTracking.view ? timeTracking.view : ({ records: ({}), actions: ({}), operations: [], conflicts: [], errors: [] })
   readonly property var records: serviceView.records || ({})
+  readonly property var projects: Array.isArray(serviceView.projects) ? serviceView.projects : []
   readonly property var recordList: {
     var values = []
     var scopes = Object.keys(records)
@@ -48,17 +49,13 @@ Panel {
     ? String(timeTracking.diagnostics.localDate) : localDateKey(today)
   readonly property var monthCells: Model.calendarMonth(viewYear, viewMonth)
   readonly property var dayEntries: Model.entriesForDay(entries, selectedDateKey)
-  readonly property var orderedProjects: timeTracking
-    ? Model.recentProjectOrder(timeTracking.projects, entries, activeTimer ? activeTimer.projectId : "")
-    : []
-  readonly property var projectShortcuts: timeTracking
-    ? Model.searchShortcuts(Model.recentShortcutOrder(
-        Model.projectShortcuts(timeTracking.projects),
-        entries,
-        activeTimer ? activeTimer.projectId : "",
-        activeTimer ? activeTimer.serviceId : ""
-      ), projectSearch)
-    : []
+  readonly property var orderedProjects: Model.recentProjectOrder(projects, entries, activeTimer ? activeTimer.projectId : "")
+  readonly property var projectShortcuts: Model.searchShortcuts(Model.recentShortcutOrder(
+    Model.projectShortcuts(projects),
+    entries,
+    activeTimer ? activeTimer.projectId : "",
+    activeTimer ? activeTimer.serviceId : ""
+  ), projectSearch)
   readonly property var setupDiagnostics: timeTracking ? (timeTracking.diagnostics || {}) : ({})
   readonly property bool setupRequired: !timeTracking || !timeTracking.diagnosticsReady
     || setupDiagnostics.configured !== true
@@ -70,6 +67,15 @@ Panel {
   property string entryServiceId: ""
   property string entryDateKey: ""
   property string entryOriginalDateKey: ""
+  property string entryOriginalProjectId: ""
+  property string entryOriginalServiceId: ""
+  property string entryOriginalNote: ""
+  property int entryOriginalDurationSeconds: 0
+  property bool entryNoteDirty: false
+  property bool entryDurationDirty: false
+  property bool entryDateDirty: false
+  property bool entryAssignmentDirty: false
+  readonly property bool entryHasDirtyFields: entryNoteDirty || entryDurationDirty || entryDateDirty || entryAssignmentDirty
   property bool confirmingDelete: false
   onEntryEditorModeChanged: {
     if (entryEditorMode === "closed") Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -337,9 +343,16 @@ Panel {
   }
 
   function projectById(projectId) {
-    for (var i = 0; timeTracking && i < timeTracking.projects.length; i++)
-      if (String(timeTracking.projects[i].id) === String(projectId)) return timeTracking.projects[i]
+    for (var i = 0; i < projects.length; i++)
+      if (String(projects[i].id) === String(projectId)) return projects[i]
     return null
+  }
+
+  function resetEntryDirtyGroups() {
+    entryNoteDirty = false
+    entryDurationDirty = false
+    entryDateDirty = false
+    entryAssignmentDirty = false
   }
 
   function beginAddEntry() {
@@ -350,10 +363,15 @@ Panel {
     entryServiceId = projectServiceId(project) === null ? "" : String(projectServiceId(project))
     entryDateKey = selectedDateKey
     entryOriginalDateKey = ""
+    entryOriginalProjectId = entryProjectId
+    entryOriginalServiceId = entryServiceId
+    entryOriginalNote = ""
+    entryOriginalDurationSeconds = 0
     confirmingDelete = false
     entryDateField.text = entryDateKey
     entryNoteField.text = ""
     entryDurationField.text = "00:00"
+    resetEntryDirtyGroups()
   }
 
   function beginEditEntry(entry) {
@@ -363,10 +381,15 @@ Panel {
     entryServiceId = String(entry.serviceId === null ? "" : entry.serviceId)
     entryDateKey = String(entry.localDate || selectedDateKey)
     entryOriginalDateKey = entryDateKey
+    entryOriginalProjectId = entryProjectId
+    entryOriginalServiceId = entryServiceId
+    entryOriginalNote = String(entry.note || "")
+    entryOriginalDurationSeconds = Number(entry.durationSeconds || 0)
     confirmingDelete = false
     entryDateField.text = entryDateKey
     entryNoteField.text = String(entry.note || "")
     entryDurationField.text = Model.formatDuration(entry.durationSeconds || 0)
+    resetEntryDirtyGroups()
   }
 
   function saveEntry() {
@@ -374,8 +397,27 @@ Panel {
     var scope = editingEntryId === "" ? "" : "time-entry:" + editingEntryId
     if (seconds === null || entryProjectId === "" || !Model.parseDateKey(entryDateKey)
         || !timeTracking || (scope !== "" && !canMutateScope(scope))) return
-    var fields = { durationSeconds: seconds, projectId: entryProjectId, serviceId: entryServiceId, note: entryNoteField.text }
-    if (entryEditorMode === "create" || entryDateKey !== entryOriginalDateKey) fields.localDate = entryDateKey
+    var draft = {
+      durationSeconds: seconds,
+      projectId: entryProjectId,
+      serviceId: entryServiceId,
+      note: entryNoteField.text,
+      localDate: entryDateKey
+    }
+    if (entryEditorMode === "edit") {
+      entryNoteDirty = draft.note !== entryOriginalNote
+      entryDurationDirty = draft.durationSeconds !== entryOriginalDurationSeconds
+      entryDateDirty = draft.localDate !== entryOriginalDateKey
+      entryAssignmentDirty = String(draft.projectId) !== entryOriginalProjectId
+        || String(draft.serviceId) !== entryOriginalServiceId
+    }
+    if (entryEditorMode === "edit" && !entryHasDirtyFields) return
+    var fields = entryEditorMode === "create" ? draft : Model.entryUpdateFields(draft, {
+      note: entryNoteDirty,
+      duration: entryDurationDirty,
+      date: entryDateDirty,
+      assignment: entryAssignmentDirty
+    })
     var accepted = entryEditorMode === "create"
       ? timeTracking.createEntry(fields)
       : timeTracking.updateEntry(editingEntryId, fields)
@@ -1191,9 +1233,9 @@ Panel {
             width: entryEditorViewport.width
             spacing: Style.space(7)
             Text { text: root.entryEditorMode === "create" ? "Add time entry" : "Edit time entry"; color: root.foreground; font.family: root.fontFamily; font.bold: true }
-            TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; onTextEdited: root.entryDateKey = text }
-            TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes" }
-            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onAccepted: root.saveEntry() }
+            TextField { id: entryDateField; width: parent.width; placeholderText: "YYYY-MM-DD"; onTextEdited: { root.entryDateKey = text; root.entryDateDirty = text !== root.entryOriginalDateKey } }
+            TextField { id: entryNoteField; width: parent.width; placeholderText: "Notes"; onTextEdited: root.entryNoteDirty = text !== root.entryOriginalNote }
+            TextField { id: entryDurationField; width: parent.width; placeholderText: "HH:MM or HH:MM:SS"; onTextEdited: root.entryDurationDirty = Model.parseDurationInput(text) !== root.entryOriginalDurationSeconds; onAccepted: root.saveEntry() }
             PanelSectionHeader { text: "PROJECT AND SERVICE"; foreground: root.foreground; fontFamily: root.fontFamily }
             SearchableDropdown {
               id: entryProjectPicker
@@ -1228,6 +1270,8 @@ Panel {
                 var selection = JSON.parse(value)
                 root.entryProjectId = selection[0]
                 root.entryServiceId = selection[1]
+                root.entryAssignmentDirty = root.entryProjectId !== root.entryOriginalProjectId
+                  || root.entryServiceId !== root.entryOriginalServiceId
               }
               Binding {
                 target: entryProjectPicker
@@ -1260,7 +1304,8 @@ Panel {
               spacing: Style.space(8)
               ActionButton {
                 label: "Save"
-                enabled: (root.entryEditorMode === "create" || root.canMutateScope("time-entry:" + root.editingEntryId))
+                enabled: (root.entryEditorMode === "create"
+                    || (root.entryHasDirtyFields && root.canMutateScope("time-entry:" + root.editingEntryId)))
                   && Model.parseDurationInput(entryDurationField.text) !== null
                   && root.entryProjectId !== "" && Model.parseDateKey(root.entryDateKey)
                 onTriggered: root.saveEntry()
