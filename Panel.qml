@@ -392,6 +392,18 @@ Panel {
     resetEntryDirtyGroups()
   }
 
+  function prepareSmokeEntryEdit(entry, note, durationText) {
+    if (String(Quickshell.env("SMOOTH_SETTLEMENT_SMOKE") || "") !== "1" || !entry) return false
+    beginEditEntry(entry)
+    entryNoteField.text = String(note)
+    entryDurationField.text = String(durationText)
+    entryNoteDirty = entryNoteField.text !== entryOriginalNote
+    entryDurationDirty = Model.parseDurationInput(entryDurationField.text) !== entryOriginalDurationSeconds
+    Qt.callLater(function() { entrySaveButton.forceActiveFocus() })
+    return true
+  }
+
+
   function saveEntry() {
     var seconds = Model.parseDurationInput(entryDurationField.text)
     var scope = editingEntryId === "" ? "" : "time-entry:" + editingEntryId
@@ -1303,6 +1315,8 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
               ActionButton {
+                id: entrySaveButton
+                objectName: "freshbooksEntrySaveTarget"
                 label: "Save"
                 enabled: (root.entryEditorMode === "create"
                     || (root.entryHasDirtyFields && root.canMutateScope("time-entry:" + root.editingEntryId)))

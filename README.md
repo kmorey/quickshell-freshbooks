@@ -65,6 +65,25 @@ interaction recording, including the isolated state/cache roots and tested
 revision in private validation metadata. Any red row exits nonzero; the gate is
 not replaceable by the Node suite, source scans, or mocked rendering.
 
+Expected visible results:
+
+- **SMOKE-1:** click the real Panel **Save** target (or focus it and press
+  Enter); the editor closes and the dashboard immediately shows `Local
+  optimistic`.
+- **SMOKE-2:** that live note never flashes back while the delayed old
+  observation completes.
+- **SMOKE-3:** the receipt clears settling without issuing a read.
+- **SMOKE-4:** note and duration render as separate conflict rows; use pointer
+  **Mine** for note and keyboard **FreshBooks** for duration while unrelated
+  entry actions remain enabled.
+- **SMOKE-5:** use pointer **Restore as new** for the first deletion and
+  keyboard **Discard local** for the second.
+- **SMOKE-6:** the harness restarts the real Service; only entry 11 restores
+  its unknown lock/draft, unrelated entries remain enabled, and no mutation is
+  retried.
+- **SMOKE-7:** elapsed text advances while the serialized ledger byte count
+  and content stay unchanged.
+
 The panel uses Omarchy's shared buttons, cursor surfaces, section headings, hero layout, and theme tokens so interaction states follow the rest of the shell. The Node suite covers calendar/date behavior, timer projections, duration parsing, project/service recency, canonical contract validation, durable operation recovery, request coordination, the fake CLI seam, the production Service runtime, and packaging contracts. CI also executes the real `freshbooks-cli` diagnostics command and requires CLI 0.3.0 with canonical contract 2 before validating the plugin manifest. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML; keyboard/pointer interaction and horizontal, vertical, narrow, and multi-monitor layouts remain part of that manual gate.
 
 ## Privacy

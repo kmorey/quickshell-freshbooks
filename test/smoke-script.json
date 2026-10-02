@@ -36,10 +36,21 @@
       }
     },
     {
+      "requestKind": "quiet-read",
+      "scope": null,
+      "outcome": "observation",
+      "data": {
+        "records": [{ "contractVersion": 2, "kind": "active-timer", "id": "timer-1", "exists": true, "segments": [{ "contractVersion": 2, "kind": "timer-segment", "id": "segment-1", "timerId": "timer-1", "exists": true, "startedAt": "2026-10-01T12:00:00.000Z", "durationSeconds": null, "running": true, "logged": false, "token": "1111111111111111111111111111111111111111111111111111111111111111" }], "state": "running", "elapsedAnchor": { "closedSeconds": 120, "runningStartedAt": "2026-10-01T12:00:00.000Z", "observedAt": "2026-10-01T12:00:00.000Z" }, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Running anchor", "billable": true, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+        "coverage": { "kind": "active-timer", "identity": null, "from": null, "to": null, "complete": true, "includesDeleted": true },
+        "cached": false,
+        "phase": null
+      }
+    },
+    {
       "requestKind": "visible-read",
       "scope": null,
       "outcome": "observation",
-      "delayMs": 1200,
+      "delayMs": 15000,
       "data": {
         "records": [{ "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Planning", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
         "coverage": { "kind": "time-entry", "identity": null, "from": "2026-10-01", "to": "2026-10-01", "complete": true, "includesDeleted": true },
@@ -64,17 +75,6 @@
       "scope": "time-entry:9",
       "outcome": "known-error",
       "error": { "code": "GUARD_REJECTED", "message": "Entry changed in FreshBooks", "details": { "contractVersion": 2, "identity": { "kind": "time-entry", "id": "9" }, "expectedToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "currentToken": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "current": { "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 5400, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Remote note", "billable": true, "billed": false, "token": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" } } }
-    },
-    {
-      "requestKind": "quiet-read",
-      "scope": null,
-      "outcome": "observation",
-      "data": {
-        "records": [{ "contractVersion": 2, "kind": "active-timer", "id": "timer-1", "exists": true, "segments": [{ "contractVersion": 2, "kind": "timer-segment", "id": "segment-1", "timerId": "timer-1", "exists": true, "startedAt": "2026-10-01T12:00:00.000Z", "durationSeconds": null, "running": true, "logged": false, "token": "1111111111111111111111111111111111111111111111111111111111111111" }], "state": "running", "elapsedAnchor": { "closedSeconds": 120, "runningStartedAt": "2026-10-01T12:00:00.000Z", "observedAt": "2026-10-01T12:00:00.000Z" }, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Running anchor", "billable": true, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
-        "coverage": { "kind": "active-timer", "identity": null, "from": null, "to": null, "complete": true, "includesDeleted": true },
-        "cached": false,
-        "phase": null
-      }
     },
     {
       "requestKind": "mutation",
