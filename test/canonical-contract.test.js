@@ -217,6 +217,40 @@ test('accepts complete canonical observations and receipts', () => {
   assert.deepEqual(completed.data, receipt())
 })
 
+test('validates every retained metadata and onboarding response by explicit tag', () => {
+  const fixtures = {
+    'project-list': [{
+      id: 44, title: 'Build', clientId: 55, clientName: 'Acme',
+      active: true, complete: false, internal: false,
+      services: [{ id: 66, name: 'Development', billable: true }]
+    }],
+    'business-list': [{ id: 123, name: 'Acme', accountId: 'abc', role: 'owner', active: true }],
+    'business-selection': { id: 123, name: 'Acme', accountId: 'abc', role: 'owner', active: true },
+    'auth-configured': {
+      configured: true, clientId: 'client', redirectUri: 'https://localhost/callback',
+      profile: 'default', credentialStore: 'secret-service', warning: null
+    },
+    'auth-url': { url: 'https://auth.example/authorize?state=opaque' },
+    'auth-login': {
+      authenticated: true, expiresAt: '2026-10-01T12:00:00.000Z',
+      scope: 'user:profile:read', credentialStore: 'secret-service', warning: null
+    }
+  }
+  for (const [responseKind, data] of Object.entries(fixtures)) {
+    const result = Contract.classifyProcessOutcome(readRequest({ responseKind }), {
+      exitCode: 0, exitStatus: 0, stdout: envelope(data)
+    })
+    assert.equal(result.outcome, 'observation', responseKind)
+    assert.equal(result.responseKind, responseKind)
+    assert.deepEqual(result.data, data)
+  }
+  const invalid = Contract.classifyProcessOutcome(readRequest({ responseKind: 'project-list' }), {
+    exitCode: 0, exitStatus: 0, stdout: envelope([{ id: 44, title: 12 }])
+  })
+  assert.equal(invalid.outcome, 'known-error')
+  assert.equal(invalid.error.code, 'CLI_METADATA_SCHEMA_MISMATCH')
+})
+
 test('rejects receipt that omits the operation scope', () => {
   const result = Contract.classifyProcessOutcome(mutation(), {
     exitCode: 0,

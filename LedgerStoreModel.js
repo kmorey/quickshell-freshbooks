@@ -8,7 +8,7 @@ var LOCKING_STATES = ["prepared", "in-flight", "rebasing", "conflicted", "unknow
 var OPERATION_KEYS = [
   "operationId", "kind", "contractVersion", "scope", "state", "base",
   "baseToken", "expectedToken", "patch", "intended", "projection", "draft",
-  "causalTag", "request", "receipt", "lineage", "creationBaseline"
+  "causalTag", "request", "receipt", "lineage", "creationBaseline", "knownError"
 ]
 var REQUIRED_OPERATION_KEYS = [
   "operationId", "kind", "contractVersion", "scope", "state", "base",
@@ -183,6 +183,10 @@ function sanitizeRequest(value) {
   return result
 }
 
+function sanitizeKnownError(value) {
+  return isObject(value) ? copyKeys(value, ["code", "message"]) : value
+}
+
 function sanitizeReceipt(receipt) {
   if (!isObject(receipt)) return receipt === null ? null : {}
   var result = copyKeys(receipt, ["contractVersion", "mutationKind", "changes", "results", "phase"])
@@ -225,6 +229,7 @@ function sanitizeOperation(operation) {
   result.draft = result.draft === null ? null : sanitizeSemanticObject(result.draft, DRAFT_KEYS)
   result.request = sanitizeRequest(result.request)
   result.receipt = sanitizeReceipt(result.receipt)
+  if (result.knownError !== undefined) result.knownError = sanitizeKnownError(result.knownError)
   if (result.creationBaseline !== undefined)
     result.creationBaseline = sanitizeCreationBaseline(result.creationBaseline)
   return result
@@ -326,6 +331,9 @@ function validReceiptScope(scope) {
 function receiptCoversOperation(operation, receipt) {
   for (var i = 0; i < receipt.changes.length; i++)
     if (receipt.changes[i].scope === operation.scope) return true
+  if (operation.kind === "switch" && receipt.mutationKind === "timer-switch"
+      && receipt.phase && receipt.phase.log === "confirmed"
+      && receipt.phase.start === "failed") return true
   if (operation.scope.indexOf("provisional:") !== 0) return false
   var expected = operation.scope.split(":")[2]
   var prefix = ""
@@ -384,6 +392,23 @@ function validReceipt(receipt, operation) {
         || unmatched[found].kind === "timer-segment") return false
     unmatched.splice(found, 1)
   }
+  if (operation.kind === "switch" && receipt.mutationKind === "timer-switch"
+      && receipt.phase.start === "failed") {
+    if (receipt.changes.length !== 2) return false
+    var hasLoggedEntry = false
+    var hasStoppedTimer = false
+    for (var m = 0; m < receipt.changes.length; m++) {
+      var partialChange = receipt.changes[m]
+      if (hasOnly(partialChange.after, ["record"])
+          && partialChange.after.record.kind === "time-entry"
+          && partialChange.after.record.exists === true) hasLoggedEntry = true
+      else if (hasOnly(partialChange.after, ["deleted"])
+          && partialChange.after.deleted === true
+          && partialChange.scope.indexOf("active-timer:") === 0) hasStoppedTimer = true
+      else return false
+    }
+    if (!hasLoggedEntry || !hasStoppedTimer) return false
+  }
   return receiptCoversOperation(operation, receipt)
 }
 
@@ -434,7 +459,7 @@ function validCreationBaseline(value, operation) {
 function validOperation(operation) {
   if (!isObject(operation)
       || !hasRequiredAndOptional(operation, REQUIRED_OPERATION_KEYS, [
-        "expectedToken", "creationBaseline"
+        "expectedToken", "creationBaseline", "knownError"
       ])
       || !/^operation-\d+$/.test(operation.operationId) || !isId(operation.kind)
       || operation.contractVersion !== 2 || !validScope(operation.scope, operation.operationId)
@@ -449,9 +474,20 @@ function validOperation(operation) {
       && operation.creationBaseline === undefined) return false
   if (operation.creationBaseline !== undefined
       && !validCreationBaseline(operation.creationBaseline, operation)) return false
+  if (operation.knownError !== undefined
+      && (!hasOnly(operation.knownError, ["code", "message"])
+        || !isId(operation.knownError.code) || !isString(operation.knownError.message))) return false
   if (operation.state === "settled")
     return operation.draft === null && operation.projection === null
       && validReceipt(operation.receipt, operation)
+  if (operation.state === "unknown" && operation.kind === "switch"
+      && operation.receipt && operation.receipt.phase
+      && operation.receipt.phase.start === "failed")
+    return validDraft(operation.draft) && validRecord(operation.projection)
+      && validReceipt(operation.receipt, operation)
+  if (operation.state === "not-applied" && operation.knownError)
+    return validDraft(operation.draft) && operation.projection === null
+      && operation.receipt === null
   if (operation.state === "superseded")
     return operation.draft === null && operation.projection === null
   return validDraft(operation.draft) && validRecord(operation.projection) && operation.receipt === null

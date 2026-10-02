@@ -139,11 +139,12 @@ Item {
     return copy
   }
 
-  function submitRead(queryKey, argv, coverage, requestKind) {
+  function submitRead(queryKey, argv, coverage, requestKind, responseKind) {
     return submitIntent({
       type: "refresh",
       requestKind: requestKind || "quiet-read",
       queryKey: queryKey,
+      responseKind: responseKind || "canonical-observation",
       coverage: coverage || null,
       argv: argv,
       commandClass: "read"
@@ -178,9 +179,9 @@ Item {
     }, "quiet-read")
   }
 
-  function refreshProjects() { return submitRead("projects", ["projects", "list"], null, "quiet-read") }
-  function refreshBusinesses() { return submitRead("businesses", ["business", "list"], null, "quiet-read") }
-  function refreshDiagnostics() { return submitRead("diagnostics", ["diagnostics", "status"], null, "quiet-read") }
+  function refreshProjects() { return submitRead("projects", ["projects", "list"], null, "quiet-read", "project-list") }
+  function refreshBusinesses() { return submitRead("businesses", ["business", "list"], null, "quiet-read", "business-list") }
+  function refreshDiagnostics() { return submitRead("diagnostics", ["diagnostics", "status"], null, "quiet-read", "diagnostics") }
 
   function refreshView(target, fromDate, toDate) {
     if (target === "entries") return refreshEntries(fromDate, toDate)
@@ -354,23 +355,50 @@ Item {
   }
 
   function configureAuth(clientId, clientSecret, redirectUri) {
-    return submitRead("configure-auth", ["auth", "configure", "--client-id", String(clientId), "--client-secret", String(clientSecret), "--redirect-uri", String(redirectUri)], null, "visible-read")
+    return submitIntent({
+      type: "refresh", requestKind: "visible-read", queryKey: "configure-auth",
+      responseKind: "auth-configured", coverage: null,
+      argv: ["auth", "configure", "--client-id", String(clientId),
+        "--client-secret-stdin", "--redirect-uri", String(redirectUri)],
+      stdin: String(clientSecret), commandClass: "read"
+    })
   }
-  function requestAuthorizationUrl() { authorizationUrl = ""; return submitRead("authorization-url", ["auth", "url"], null, "visible-read") }
+  function requestAuthorizationUrl() {
+    authorizationUrl = ""
+    return submitRead("authorization-url", ["auth", "url"], null, "visible-read", "auth-url")
+  }
   function completeAuthentication(codeOrUrl) {
-    return submitIntent({ type: "refresh", requestKind: "visible-read", queryKey: "authentication", coverage: null,
-      argv: ["auth", "login", "--code-stdin"], stdin: String(codeOrUrl), commandClass: "read" })
+    return submitIntent({
+      type: "refresh", requestKind: "visible-read", queryKey: "authentication",
+      responseKind: "auth-login", coverage: null,
+      argv: ["auth", "login", "--code-stdin"], stdin: String(codeOrUrl), commandClass: "read"
+    })
   }
-  function selectBusiness(businessId) { return submitRead("select-business", ["business", "use", String(businessId)], null, "visible-read") }
+  function selectBusiness(businessId) {
+    return submitRead("select-business", ["business", "use", String(businessId)],
+      null, "visible-read", "business-selection")
+  }
 
   function adoptMetadata(completion) {
-    var key = String(completion.queryKey || "")
+    if (!completion) return
+    var kind = String(completion.responseKind || "")
     var data = completion.data
-    if (key === "diagnostics" && data) diagnostics = data
-    else if (key === "projects") projects = Array.isArray(data) ? data : (data && data.records || [])
-    else if (key === "businesses") businesses = Array.isArray(data) ? data : (data && data.records || [])
-    else if (key === "authorization-url" && data) authorizationUrl = String(data.url || data.authorizationUrl || "")
-    if (completion.outcome === "known-error" || completion.outcome === "unknown") {
+    if (completion.outcome === "observation") {
+      if (kind === "diagnostics" && data) diagnostics = data
+      else if (kind === "project-list") projects = data
+      else if (kind === "business-list") businesses = data
+      else if (kind === "auth-url") authorizationUrl = String(data && data.url || "")
+      else if (kind === "auth-configured") {
+        refreshDiagnostics()
+        requestAuthorizationUrl()
+      } else if (kind === "auth-login") {
+        authorizationUrl = ""
+        refreshDiagnostics()
+      } else if (kind === "business-selection") {
+        businesses = []
+        refreshDiagnostics()
+      }
+    } else if (completion.outcome === "known-error" || completion.outcome === "unknown") {
       lastErrorCode = String(completion.error && completion.error.code || "CLI_ERROR")
       lastError = String(completion.error && completion.error.message || "FreshBooks request failed")
     }
@@ -379,8 +407,8 @@ Item {
   Connections {
     target: root.cliAdapter
     function onCompleted(completion) {
-      root.adoptMetadata(completion)
-      root.runtime.adapterCompleted(completion)
+      var metadata = root.runtime.adapterCompleted(completion)
+      root.adoptMetadata(metadata)
       root.publishView()
       root.flushActions()
     }

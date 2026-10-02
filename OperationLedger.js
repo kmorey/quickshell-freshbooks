@@ -234,10 +234,20 @@ function restore(snapshot, options) {
   if (!isObject(snapshot) || snapshot.schemaVersion !== SCHEMA_VERSION
       || !Array.isArray(snapshot.operations) || !isObject(snapshot.records)) return null
   var operations = clone(snapshot.operations)
-  for (var i = 0; i < operations.length; i++)
+  var errors = []
+  for (var i = 0; i < operations.length; i++) {
     if (operations[i].kind === "switch" && operations[i].state === "unknown"
         && operations[i].base && operations[i].base.exists === false)
       operations[i].reconciliation = { log: "settled", start: "unknown" }
+    if (operations[i].knownError) errors.push({
+      code: operations[i].knownError.code,
+      message: operations[i].knownError.message,
+      operationId: operations[i].operationId,
+      scope: operations[i].scope,
+      actionable: true,
+      persistent: false
+    })
+  }
   var sequence = maximumSequence(operations)
   options = options || {}
   return {
@@ -245,7 +255,7 @@ function restore(snapshot, options) {
     revision: 0,
     operations: operations,
     records: recordsByScope(snapshot.records),
-    errors: [],
+    errors: errors,
     _lastOperationSequence: sequence,
     _nextOperationSequence: options.nextOperationSequence || defaultGenerator(sequence)
   }
@@ -951,6 +961,67 @@ function unknownCompletion(state, event) {
   }])
 }
 
+function partialSwitchCompletion(state, event) {
+  var source = operationById(state, event.operationId)
+  var receipt = event.error && event.error.details && event.error.details.partialReceipt
+  if (!source || source.state !== "in-flight" || source.kind !== "switch"
+      || !isObject(receipt) || receipt.mutationKind !== "timer-switch"
+      || !isObject(receipt.phase) || receipt.phase.log !== "confirmed"
+      || receipt.phase.start !== "failed" || !Array.isArray(receipt.results)) return result(state, [])
+  var next = cloneState(state)
+  var operation = operationById(next, event.operationId)
+  operation.state = "unknown"
+  operation.receipt = clone(receipt)
+  operation.unknownError = {
+    code: "TIMER_SWITCH_PARTIAL",
+    message: String(event.error.message || "Timer switch partially completed")
+  }
+  operation.reconciliation = { log: "settled", start: "unknown" }
+  if (operation.base) {
+    operation.base = {
+      contractVersion: operation.contractVersion,
+      kind: operation.base.kind,
+      id: operation.base.id,
+      exists: false,
+      token: null
+    }
+    operation.baseToken = null
+  }
+  delete next.records[operation.scope]
+  for (var i = 0; i < receipt.results.length; i++)
+    publishRecord(next, recordScope(receipt.results[i]), receipt.results[i])
+  next.revision += 1
+  return result(next, [{
+    type: "persist",
+    transactionId: "partial-" + operation.operationId,
+    snapshot: durableSnapshot(next)
+  }])
+}
+
+function knownErrorCompletion(state, event) {
+  var source = operationById(state, event.operationId)
+  if (!source || source.state !== "in-flight" || !event.error) return result(state, [])
+  var next = cloneState(state)
+  var operation = operationById(next, event.operationId)
+  operation.pendingKnownError = {
+    code: String(event.error.code || "MUTATION_REJECTED"),
+    message: String(event.error.message || "FreshBooks rejected the mutation")
+  }
+  var durable = cloneState(next)
+  var durableOperation = operationById(durable, event.operationId)
+  durableOperation.state = "not-applied"
+  durableOperation.knownError = clone(operation.pendingKnownError)
+  delete durableOperation.pendingKnownError
+  durableOperation.projection = null
+  publishRecord(durable, durableOperation.scope, durableOperation.base)
+  durable.revision += 1
+  return result(next, [{
+    type: "persist",
+    transactionId: "known-error-" + operation.operationId,
+    snapshot: durableSnapshot(durable)
+  }])
+}
+
 function causalOrder(tag) {
   var match = /(?:^|[^0-9])(\d+)$/.exec(String(tag || ""))
   return match ? Number(match[1]) : null
@@ -1037,6 +1108,8 @@ function operationByTransaction(state, transactionId) {
         || "conflict-" + operation.operationId === transactionId
         || "resolution-" + operation.operationId === transactionId
         || "unknown-" + operation.operationId === transactionId
+        || "partial-" + operation.operationId === transactionId
+        || "known-error-" + operation.operationId === transactionId
         || "reconcile-" + operation.operationId === transactionId) return operation
   }
   return null
@@ -1050,6 +1123,29 @@ function persisted(state, event) {
   if (event.transactionId === "unknown-" + operation.operationId
       && operation.state === "unknown")
     return result(state, [reconciliationRequest(operation)])
+  if (event.transactionId === "partial-" + operation.operationId
+      && operation.state === "unknown")
+    return result(state, [reconciliationRequest(operation)])
+  if (event.transactionId === "known-error-" + operation.operationId
+      && operation.pendingKnownError) {
+    var rejected = cloneState(state)
+    var rejectedOperation = operationById(rejected, operation.operationId)
+    rejectedOperation.state = "not-applied"
+    rejectedOperation.knownError = clone(rejectedOperation.pendingKnownError)
+    delete rejectedOperation.pendingKnownError
+    rejectedOperation.projection = null
+    publishRecord(rejected, rejectedOperation.scope, rejectedOperation.base)
+    rejected.errors.push({
+      code: rejectedOperation.knownError.code,
+      message: rejectedOperation.knownError.message,
+      operationId: rejectedOperation.operationId,
+      scope: rejectedOperation.scope,
+      actionable: true,
+      persistent: false
+    })
+    rejected.revision += 1
+    return result(rejected, [])
+  }
   if (event.transactionId === "reconcile-" + operation.operationId
       && operation.pendingReconciliation) {
     var reconciled = cloneState(state)
@@ -1173,6 +1269,8 @@ function persistenceFailed(state, event) {
     delete unresolved.pendingResolution
   if (event.transactionId === "reconcile-" + operation.operationId)
     delete unresolved.pendingReconciliation
+  if (event.transactionId === "known-error-" + operation.operationId)
+    delete unresolved.pendingKnownError
   next.errors.push({
     code: "LEDGER_WRITE_FAILED",
     message: String(event.error && event.error.message || event.error || "Ledger persistence failed"),
@@ -1204,6 +1302,11 @@ function apply(state, event) {
   if (event.type === "completion" && event.outcome === "receipt") return settleReceipt(state, event)
   if (event.type === "completion" && event.outcome === "known-error"
       && event.error && event.error.code === "GUARD_REJECTED") return guardRejection(state, event)
+  if (event.type === "completion" && event.outcome === "known-error"
+      && event.error && event.error.code === "TIMER_SWITCH_PARTIAL")
+    return partialSwitchCompletion(state, event)
+  if (event.type === "completion" && event.outcome === "known-error")
+    return knownErrorCompletion(state, event)
   if (event.type === "persistence-failed") return persistenceFailed(state, event)
   return result(state, [])
 }

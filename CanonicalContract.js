@@ -288,6 +288,66 @@ function validateDiagnostics(data) {
   return true
 }
 
+function isExternalId(value) {
+  return isId(value) || isNonNegativeInteger(value)
+}
+
+function isNullableString(value) {
+  return value === null || value === undefined || isString(value)
+}
+
+function validateBusiness(value) {
+  return hasOnly(value, ["id", "name", "accountId", "role", "active"], [])
+    && isExternalId(value.id) && isString(value.name)
+    && isExternalId(value.accountId) && isString(value.role) && isBoolean(value.active)
+}
+
+function validateProject(value) {
+  if (!hasOnly(value, [
+    "id", "title", "clientId", "clientName", "active", "complete", "internal", "services"
+  ], []) || !isExternalId(value.id) || !isString(value.title)
+      || !(value.clientId === null || isExternalId(value.clientId))
+      || !isString(value.clientName) || !isBoolean(value.active)
+      || !isBoolean(value.complete) || !isBoolean(value.internal)
+      || !Array.isArray(value.services)) return false
+  for (var i = 0; i < value.services.length; i++) {
+    var service = value.services[i]
+    if (!hasOnly(service, ["id", "name", "billable"], [])
+        || !isExternalId(service.id) || !isString(service.name)
+        || !isBoolean(service.billable)) return false
+  }
+  return true
+}
+
+function validateMetadata(responseKind, data) {
+  if (responseKind === "project-list") {
+    if (!Array.isArray(data)) return false
+    for (var i = 0; i < data.length; i++) if (!validateProject(data[i])) return false
+    return true
+  }
+  if (responseKind === "business-list") {
+    if (!Array.isArray(data)) return false
+    for (var j = 0; j < data.length; j++) if (!validateBusiness(data[j])) return false
+    return true
+  }
+  if (responseKind === "business-selection") return validateBusiness(data)
+  if (responseKind === "auth-configured")
+    return hasOnly(data, [
+      "configured", "clientId", "redirectUri", "profile", "credentialStore", "warning"
+    ], []) && data.configured === true && isString(data.clientId)
+      && isString(data.redirectUri) && isString(data.profile)
+      && isString(data.credentialStore) && isNullableString(data.warning)
+  if (responseKind === "auth-url")
+    return hasOnly(data, ["url"], []) && isString(data.url) && data.url.length > 0
+  if (responseKind === "auth-login")
+    return hasOnly(data, [
+      "authenticated", "expiresAt", "scope", "credentialStore", "warning"
+    ], []) && data.authenticated === true && isNullableString(data.expiresAt)
+      && isNullableString(data.scope) && isString(data.credentialStore)
+      && isNullableString(data.warning)
+  return false
+}
+
 function parseDocument(text) {
   if (!isString(text) || text.trim() === "") return null
   try { return JSON.parse(text) } catch (error) { return null }
@@ -347,9 +407,7 @@ function validateDeclaredError(error, request) {
 }
 
 function isDiagnosticsRequest(request) {
-  if (!request) return false
-  if (request.intent === "refreshDiagnostics" || request.queryKey === "diagnostics") return true
-  return Array.isArray(request.argv) && request.argv[0] === "diagnostics"
+  return request && request.responseKind === "diagnostics"
 }
 
 function classifyProcessOutcome(request, processResult) {
@@ -390,6 +448,12 @@ function classifyProcessOutcome(request, processResult) {
       return classifiedError(request, "CLI_DIAGNOSTICS_SCHEMA_MISMATCH", "freshbooks-cli diagnostics are incompatible", false, result)
     return completion(request, "observation", "data", stdoutDocument.data, result)
   }
+  if (request && request.responseKind && request.responseKind !== "canonical-observation") {
+    if (!validateMetadata(request.responseKind, stdoutDocument.data))
+      return classifiedError(request, "CLI_METADATA_SCHEMA_MISMATCH",
+        "freshbooks-cli returned incompatible metadata", false, result)
+    return completion(request, "observation", "data", stdoutDocument.data, result)
+  }
   if (!validateObservation(stdoutDocument.data))
     return classifiedError(request, "CLI_RECORD_SCHEMA_MISMATCH", "freshbooks-cli returned an incompatible canonical observation", false, result)
   return completion(request, "observation", "data", stdoutDocument.data, result)
@@ -400,5 +464,6 @@ if (typeof module !== "undefined") module.exports = {
   validateObservation: validateObservation,
   validateReceipt: validateReceipt,
   validateGuardRejection: validateGuardRejection,
+  validateMetadata: validateMetadata,
   classifyProcessOutcome: classifyProcessOutcome
 }

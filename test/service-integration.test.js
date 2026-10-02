@@ -3,6 +3,8 @@ const assert = require('node:assert/strict')
 
 const Ledger = require('../OperationLedger.js')
 const Coordinator = require('../RequestCoordinator.js')
+const Store = require('../LedgerStoreModel.js')
+const Contract = require('../CanonicalContract.js')
 const { createServiceRuntime } = require('../ServiceRuntime.js')
 
 const budgets = { read: 64000, 'single-write': 128000, 'multi-segment': 320000, log: 192000, switch: 320000 }
@@ -135,6 +137,34 @@ test('guard rejection rebases once', () => {
   assert.equal(service.getView().operations.filter(operation => operation.state === 'prepared').length, 1)
 })
 
+test('persist-only conflict resolutions are accepted', () => {
+  function conflictedService() {
+    const service = runtime([entry()])
+    const request = persistThenStart(service, updateIntent())
+    const current = entry('9', { note: 'Changed remotely', token: 'c'.repeat(64) })
+    service.adapterCompleted({ ...request, outcome: 'known-error', error: {
+      code: 'GUARD_REJECTED', message: 'changed', details: {
+        contractVersion: 2, identity: { kind: 'time-entry', id: '9' },
+        expectedToken: tokenA, currentToken: current.token, current
+      }
+    } })
+    const [conflictSave] = service.takeActions()
+    service.storeSaved(conflictSave.transactionId)
+    service.takeActions()
+    return service
+  }
+
+  const discarded = conflictedService()
+  assert.equal(discarded.submitIntent({ type: 'discard-local', operationId: 'operation-1' }), true)
+  assert.deepEqual(discarded.takeActions().map(action => action.type), ['persist'])
+
+  const chosen = conflictedService()
+  assert.equal(chosen.submitIntent({
+    type: 'choose-freshbooks', operationId: 'operation-1', group: 'note'
+  }), true)
+  assert.deepEqual(chosen.takeActions().map(action => action.type), ['persist'])
+})
+
 test('partial switch preserves logged result', () => {
   const base = timer()
   const target = timer('target', { projectId: '77', token: tokenB })
@@ -149,19 +179,38 @@ test('partial switch preserves logged result', () => {
   service.adapterCompleted({ ...request, outcome: 'known-error', error: {
     code: 'TIMER_SWITCH_PARTIAL', details: { partialReceipt: {
       contractVersion: 2, mutationKind: 'timer-switch',
-      changes: [{ scope: 'active-timer:timer-1', before: { token: tokenA }, after: { deleted: true } }],
+      changes: [
+        { scope: 'time-entry:20', before: { absent: true }, after: { record: logged } },
+        { scope: 'active-timer:timer-1', before: { token: tokenA }, after: { deleted: true } }
+      ],
       results: [logged, oldDeleted], phase: { log: 'confirmed', start: 'failed' }
     }, startError: { code: 'START_FAILED', message: 'failed' } }
   } })
-  let actions = service.takeActions()
+  const actions = service.takeActions()
   assert.deepEqual(actions.map(action => action.type), ['persist'])
+  assert.equal(actions[0].snapshot.operations.at(-1).receipt.phase.start, 'failed')
+  const durablePartial = Store.deserialize(Store.serialize(actions[0].snapshot)).snapshot
+  const incompletePartial = structuredClone(actions[0].snapshot)
+  incompletePartial.operations.at(-1).receipt.changes =
+    incompletePartial.operations.at(-1).receipt.changes.filter(change => change.scope !== 'time-entry:20')
+  incompletePartial.operations.at(-1).receipt.results =
+    incompletePartial.operations.at(-1).receipt.results.filter(record => record.kind !== 'time-entry')
+  assert.throws(() => Store.serialize(incompletePartial), /invalid durable ledger snapshot/)
+  const beforeAcknowledgment = createServiceRuntime({ Ledger, Coordinator, budgets })
+  beforeAcknowledgment.startup(durablePartial)
+  assert.equal(beforeAcknowledgment.getView().records['time-entry:20'].id, '20')
+  assert.equal(beforeAcknowledgment.getView().operations.at(-1).state, 'unknown')
+  assert.equal(beforeAcknowledgment.takeActions()[0].type, 'start')
   service.storeSaved(actions[0].transactionId)
-  actions = service.takeActions()
-  const partialSave = actions.find(action => action.type === 'persist')
-  assert.ok(partialSave)
-  service.storeSaved(partialSave.transactionId)
+  const afterAcknowledgment = service.takeActions()
+  assert.equal(afterAcknowledgment.some(action => action.type === 'start'
+    && action.request.requestKind === 'reconciliation'), true)
   assert.equal(service.getView().records['time-entry:20'].id, '20')
   assert.equal(service.getView().operations.at(-1).state, 'unknown')
+  const afterRestart = createServiceRuntime({ Ledger, Coordinator, budgets })
+  afterRestart.startup(durablePartial)
+  assert.equal(afterRestart.getView().records['time-entry:20'].id, '20')
+  assert.equal(afterRestart.getView().operations.at(-1).state, 'unknown')
 })
 
 test('unknown blocks only affected scope and queues reconciliation', () => {
@@ -196,6 +245,104 @@ test('quiet refreshes coalesce', () => {
   assert.equal(actions.filter(action => action.type === 'start').length, 1)
 })
 
+test('runtime mediates metadata and rejects stale or canceled deliveries', () => {
+  const service = runtime()
+  service.submitIntent({
+    type: 'refresh', requestKind: 'quiet-read', queryKey: 'projects',
+    responseKind: 'project-list', argv: ['projects', 'list']
+  })
+  let [start] = service.takeActions()
+  service.adapterStarted(start.request.requestId)
+  const accepted = service.adapterCompleted({
+    ...start.request, outcome: 'observation', data: [{ id: 44, title: 'Build' }]
+  })
+  assert.deepEqual(accepted, {
+    responseKind: 'project-list',
+    queryKey: 'projects',
+    outcome: 'observation',
+    data: [{ id: 44, title: 'Build' }]
+  })
+
+  service.submitIntent({
+    type: 'refresh', requestKind: 'quiet-read', queryKey: 'businesses',
+    responseKind: 'business-list', argv: ['business', 'list']
+  })
+  ;[start] = service.takeActions()
+  service.adapterStarted(start.request.requestId)
+  service.submitIntent({
+    type: 'refresh', requestKind: 'quiet-read', queryKey: 'businesses',
+    responseKind: 'business-list', argv: ['business', 'list']
+  })
+  assert.equal(service.adapterCompleted({
+    ...start.request, outcome: 'observation', data: [{ id: 1, name: 'stale' }]
+  }), null)
+  const newerStart = service.takeActions().find(action => action.type === 'start')
+  assert.ok(newerStart)
+
+  const cancelService = runtime([entry()])
+  cancelService.submitIntent({
+    type: 'refresh', requestKind: 'quiet-read', queryKey: 'projects',
+    responseKind: 'project-list', argv: ['projects', 'list']
+  })
+  const [readStart] = cancelService.takeActions()
+  cancelService.adapterStarted(readStart.request.requestId)
+  cancelService.submitIntent(updateIntent())
+  const [save] = cancelService.takeActions()
+  cancelService.storeSaved(save.transactionId)
+  assert.equal(cancelService.takeActions()[0].type, 'cancel-read')
+  assert.equal(cancelService.adapterCompleted({
+    ...readStart.request, outcome: 'observation', canceled: true,
+    data: [{ id: 44, title: 'late' }]
+  }), null)
+})
+
+test('retained metadata and onboarding commands validate through the runtime', () => {
+  const cases = [
+    ['project-list', ['projects', 'list'], [{
+      id: 44, title: 'Build', clientId: 55, clientName: 'Acme', active: true,
+      complete: false, internal: false,
+      services: [{ id: 66, name: 'Development', billable: true }]
+    }]],
+    ['business-list', ['business', 'list'],
+      [{ id: 123, name: 'Acme', accountId: 'abc', role: 'owner', active: true }]],
+    ['business-selection', ['business', 'use', '123'],
+      { id: 123, name: 'Acme', accountId: 'abc', role: 'owner', active: true }],
+    ['auth-configured', ['auth', 'configure'], {
+      configured: true, clientId: 'client', redirectUri: 'https://localhost/callback',
+      profile: 'default', credentialStore: 'secret-service', warning: null
+    }],
+    ['auth-url', ['auth', 'url'], { url: 'https://auth.example/authorize?state=opaque' }],
+    ['auth-login', ['auth', 'login'], {
+      authenticated: true, expiresAt: '2026-10-01T12:00:00.000Z',
+      scope: 'user:profile:read', credentialStore: 'secret-service', warning: null
+    }],
+    ['diagnostics', ['diagnostics', 'status'], {
+      version: '0.3.0', configured: true, authenticated: true, businessSelected: true,
+      timezone: 'America/Chicago', localDate: '2026-10-01', canonicalContractVersion: 2,
+      commandBudgetsMs: { read: 64000, singleWrite: 128000, multiSegment: 320000, log: 192000, switch: 320000 },
+      capabilities: ['semantic-guards', 'canonical-tracking-v2', 'mutation-receipts']
+    }]
+  ]
+  for (const [responseKind, argv, data] of cases) {
+    const service = runtime()
+    service.submitIntent({
+      type: 'refresh', requestKind: 'visible-read', queryKey: responseKind,
+      responseKind, argv
+    })
+    const [start] = service.takeActions()
+    service.adapterStarted(start.request.requestId)
+    const completion = Contract.classifyProcessOutcome(start.request, {
+      exitCode: 0,
+      exitStatus: 0,
+      stdout: JSON.stringify({ schemaVersion: 1, ok: true, data })
+    })
+    assert.equal(completion.outcome, 'observation', responseKind)
+    assert.deepEqual(service.adapterCompleted(completion), {
+      responseKind, queryKey: responseKind, outcome: 'observation', data
+    })
+  }
+})
+
 test('all time entry and active timer intents route receipt conflict and unknown outcomes', async t => {
   const baseEntry = entry()
   const baseTimer = timer()
@@ -215,7 +362,7 @@ test('all time entry and active timer intents route receipt conflict and unknown
     ['update', [baseEntry], updateIntent(), 'time-entry-update', entry('9', { note: 'Changed locally', token: tokenB })],
     ['delete', [baseEntry], { type: 'save-entry', scope: 'time-entry:9', base: baseEntry, baseToken: tokenA, intended: deletedEntry, patch: { 'timer-state': { state: 'deleted' } }, draft: {}, argv: ['time', 'delete', '9'], commandClass: 'single-write' }, 'time-entry-delete', deletedEntry],
     ['start', [], { type: 'start', scope: null, base: null, intended: timer('new', { token: tokenB }), patch: { 'timer-state': { state: 'running' } }, draft: {}, argv: ['timer', 'start'], commandClass: 'multi-segment' }, 'timer-start', timer('new', { token: tokenB })],
-    ['pause', [baseTimer], { type: 'pause', scope: 'active-timer:timer-1', base: baseTimer, baseToken: tokenA, intended: timer('timer-1', { state: 'paused', token: tokenB }), patch: { 'timer-state': { state: 'paused' } }, draft: {}, argv: ['timer', 'pause'], commandClass: 'multi-segment' }, 'timer-pause', timer('timer-1', { state: 'paused', token: tokenB })],
+    ['pause', [baseTimer], { type: 'pause', scope: 'active-timer:timer-1', base: baseTimer, baseToken: tokenA, intended: { ...pausedTimer, token: tokenB }, patch: { 'timer-state': { state: 'paused' } }, draft: {}, argv: ['timer', 'pause'], commandClass: 'multi-segment' }, 'timer-pause', { ...pausedTimer, token: tokenB }],
     ['resume', [pausedTimer], { type: 'resume', scope: 'active-timer:timer-1', base: pausedTimer, baseToken: tokenA, intended: timer('timer-1', { token: tokenB }), patch: { 'timer-state': { state: 'running' } }, draft: {}, argv: ['timer', 'resume'], commandClass: 'multi-segment' }, 'timer-resume', timer('timer-1', { token: tokenB })],
     ['correct', [baseTimer], { type: 'correct-duration', scope: 'active-timer:timer-1', base: baseTimer, baseToken: tokenA, intended: correctedTimer, patch: { duration: 1800 }, draft: {}, argv: ['timer', 'correct'], commandClass: 'multi-segment' }, 'timer-correct', correctedTimer],
     ['note', [baseTimer], { type: 'update-note', scope: 'active-timer:timer-1', base: baseTimer, baseToken: tokenA, intended: timer('timer-1', { note: 'New', token: tokenB }), patch: { note: 'New' }, draft: {}, argv: ['timer', 'update'], commandClass: 'multi-segment' }, 'timer-update', timer('timer-1', { note: 'New', token: tokenB })],
@@ -237,14 +384,33 @@ test('all time entry and active timer intents route receipt conflict and unknown
       service.adapterCompleted({ ...request, outcome: 'unknown', error: { code: 'TIMEOUT' } })
       assert.equal(service.getView().operations.at(-1).state, 'unknown')
     })
-    await t.test(`${name} conflict`, () => {
+    await t.test(`${name} known error`, () => {
       const service = runtime(records)
       const request = persistThenStart(service, intent)
-      if (!intent.base) {
-        service.adapterCompleted({ ...request, outcome: 'known-error', error: { code: 'VALIDATION_FAILED' } })
-        assert.equal(service.getView().operations.at(-1).state, 'in-flight')
-        return
-      }
+      service.adapterCompleted({
+        ...request,
+        outcome: 'known-error',
+        error: { code: 'VALIDATION_FAILED', message: 'Rejected without applying' }
+      })
+      const [save] = service.takeActions()
+      assert.equal(save.type, 'persist')
+      const durableKnownError = Store.deserialize(Store.serialize(save.snapshot)).snapshot
+      assert.equal(durableKnownError.operations.at(-1).knownError.code, 'VALIDATION_FAILED')
+      assert.equal(service.getView().operations.at(-1).state, 'in-flight')
+      service.storeSaved(save.transactionId)
+      assert.equal(service.getView().operations.at(-1).state, 'not-applied')
+      assert.equal(service.getView().operations.at(-1).draftAvailable, true)
+      assert.equal(service.getView().actions[request.scope].canMutate, true)
+      assert.equal(service.getView().errors.at(-1).code, 'VALIDATION_FAILED')
+      const restarted = createServiceRuntime({ Ledger, Coordinator, budgets })
+      restarted.startup(durableKnownError)
+      assert.equal(restarted.getView().operations.at(-1).state, 'not-applied')
+      assert.equal(restarted.getView().operations.at(-1).draftAvailable, true)
+      assert.equal(restarted.getView().errors.at(-1).code, 'VALIDATION_FAILED')
+    })
+    if (intent.base) await t.test(`${name} conflict`, () => {
+      const service = runtime(records)
+      const request = persistThenStart(service, intent)
       const current = {
         contractVersion: 2, kind: intent.base.kind, id: intent.base.id, exists: false, token: null
       }

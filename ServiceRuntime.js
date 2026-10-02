@@ -13,7 +13,6 @@ function createServiceRuntime(options) {
   var actions = []
   var startedRequests = {}
   var refreshSequence = 0
-  var pendingPartials = {}
   var activePersistId = null
   var pendingPersists = []
 
@@ -112,26 +111,25 @@ function createServiceRuntime(options) {
   }
 
   function handleCoordinatorActions(coordinatorActions) {
+    var metadata = null
     for (var i = 0; i < coordinatorActions.length; i++) {
       var action = coordinatorActions[i]
       if (action.type !== "complete") continue
       delete startedRequests[action.requestId]
-      if (action.outcome === "known-error" && action.error
-          && action.error.code === "TIMER_SWITCH_PARTIAL"
-          && action.error.details && action.error.details.partialReceipt) {
-        pendingPartials[action.operationId] = action.error.details.partialReceipt
-        applyLedger({
-          type: "completion",
-          operationId: action.operationId,
-          requestId: action.requestId,
-          causalTag: action.causalTag,
-          outcome: "unknown",
-          error: action.error
-        })
+      if (action.request && action.request.responseKind
+          && action.request.responseKind !== "canonical-observation") {
+        metadata = {
+          responseKind: action.request.responseKind,
+          queryKey: action.request.queryKey,
+          outcome: action.outcome
+        }
+        if (action.data !== undefined) metadata.data = action.data
+        if (action.error !== undefined) metadata.error = action.error
       } else {
         applyLedger(completionEvent(action))
       }
     }
+    return metadata
   }
 
   function submitRefresh(intent) {
@@ -153,6 +151,7 @@ function createServiceRuntime(options) {
       argv: Array.isArray(intent.argv) ? intent.argv.slice() : []
     }
     if (intent.stdin !== undefined) effect.stdin = intent.stdin
+    if (intent.responseKind !== undefined) effect.responseKind = intent.responseKind
     applyCoordinator({ type: "enqueue", effect: effect })
     return true
   }
@@ -163,9 +162,9 @@ function createServiceRuntime(options) {
     submitIntent: function(intent) {
       if (!intent || typeof intent.type !== "string") return false
       if (intent.type === "refresh") return submitRefresh(intent)
-      var previousRevision = view.revision
+      var previousState = ledgerState
       var result = applyLedger({ type: "intent", intent: intent })
-      return result.view.revision !== previousRevision
+      return result.state !== previousState
     },
 
     startup: function(snapshot) {
@@ -174,7 +173,6 @@ function createServiceRuntime(options) {
       coordinatorState = Coordinator.initialState(options.budgets)
       actions = []
       startedRequests = {}
-      pendingPartials = {}
       activePersistId = null
       pendingPersists = []
       var result = Ledger.apply(ledgerState, { type: "startup" })
@@ -185,23 +183,6 @@ function createServiceRuntime(options) {
 
     storeSaved: function(transactionId) {
       var result = applyLedger({ type: "persisted", transactionId: transactionId })
-      var operationId = String(transactionId || "").indexOf("unknown-") === 0
-        ? String(transactionId).slice("unknown-".length) : null
-      if (operationId && pendingPartials[operationId]) {
-        var receipt = pendingPartials[operationId]
-        delete pendingPartials[operationId]
-        applyLedger({
-          type: "observation",
-          operationId: operationId,
-          causalTag: ledgerState.operations.filter(function(operation) {
-            return operation.operationId === operationId
-          })[0].causalTag,
-          records: receipt.results,
-          complete: true,
-          includesDeleted: true,
-          phase: receipt.phase
-        })
-      }
       finishPersist(transactionId)
       return result
     },
@@ -239,8 +220,9 @@ function createServiceRuntime(options) {
       }
       var result = Coordinator.apply(coordinatorState, event)
       coordinatorState = result.state
-      handleCoordinatorActions(result.actions || [])
+      var metadata = handleCoordinatorActions(result.actions || [])
       queueCoordinatorActions(result.actions || [])
+      return metadata
     },
 
     deadline: function(requestId) {
