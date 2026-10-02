@@ -5,6 +5,7 @@ const Ledger = require('../OperationLedger.js')
 const Coordinator = require('../RequestCoordinator.js')
 const Store = require('../LedgerStoreModel.js')
 const Contract = require('../CanonicalContract.js')
+const Model = require('../TimeTrackingModel.js')
 const { createServiceRuntime } = require('../ServiceRuntime.js')
 
 const budgets = { read: 64000, 'single-write': 128000, 'multi-segment': 320000, log: 192000, switch: 320000 }
@@ -94,6 +95,119 @@ test('store save gates mutation dispatch', () => {
   assert.deepEqual(service.takeActions(), [])
   service.storeSaved(save.transactionId)
   assert.equal(service.takeActions()[0].type, 'start')
+})
+
+test('every timer intent is canonical and serializable before dispatch', () => {
+  const now = '2026-09-02T17:30:30.000Z'
+  const base = timer()
+  const cases = [
+    ['pause', base, {}, { 'timer-state': { state: 'paused' } }],
+    ['resume', Model.projectTimerIntent('pause', base, {}, now), {}, { 'timer-state': { state: 'running' } }],
+    ['correct-duration', base, { durationSeconds: 300 }, { duration: 300 }],
+    ['update-note', base, { note: 'Changed' }, { note: 'Changed' }],
+    ['log', base, {}, { 'timer-state': { state: 'logged' } }],
+    ['discard', base, {}, { 'timer-state': { state: 'deleted' } }]
+  ]
+  for (const [type, current, values, patch] of cases) {
+    const service = runtime([current])
+    const intended = Model.projectTimerIntent(type, current, values, now)
+    assert.equal(service.submitIntent({
+      type, scope: `active-timer:${current.id}`, base: current, baseToken: current.token,
+      intended, patch, draft: values, argv: ['timer', type, '--id', current.id],
+      commandClass: type === 'log' ? 'log' : 'multi-segment'
+    }), true)
+    const [save] = service.takeActions()
+    assert.doesNotThrow(() => Store.serialize(save.snapshot), type)
+    assert.deepEqual(service.takeActions(), [])
+    service.storeSaved(save.transactionId)
+    assert.deepEqual(service.takeActions().map(action => action.type), ['start'])
+  }
+
+  for (const type of ['start', 'switch']) {
+    const service = runtime(type === 'switch' ? [base] : [])
+    const intended = Model.projectTimerIntent(type, type === 'switch' ? base : null, {
+      projectId: '77', serviceId: '88', note: 'Next'
+    }, now)
+    assert.equal(service.submitIntent({
+      type, scope: null, base: type === 'switch' ? base : null,
+      baseToken: type === 'switch' ? base.token : null, intended,
+      patch: { assignment: { projectId: '77', serviceId: '88' }, note: 'Next' },
+      draft: { projectId: '77', serviceId: '88', note: 'Next' },
+      argv: ['timer', type, '--project', '77'],
+      commandClass: type === 'switch' ? 'switch' : 'multi-segment'
+    }), true)
+    const [save] = service.takeActions()
+    const restored = Store.deserialize(Store.serialize(save.snapshot))
+    assert.equal(restored.recoveryError, null, type)
+    assert.equal(restored.snapshot.operations[0].intended.segments.length, 1, type)
+    assert.deepEqual(service.takeActions(), [])
+  }
+})
+
+test('corrupt and unsupported ledger recovery locks mutations without replacing unread bytes', () => {
+  const cases = [
+    ['{"schemaVersion":99,"operations":[SENSITIVE BYTES', 'LEDGER_CORRUPT'],
+    [JSON.stringify({ schemaVersion: 99, operations: [], records: {} }), 'LEDGER_SCHEMA_UNSUPPORTED']
+  ]
+  for (const [unread, code] of cases) {
+    const loaded = Store.deserialize(unread)
+    assert.equal(loaded.unreadText, unread)
+    const service = createServiceRuntime({ Ledger, Coordinator, budgets })
+    service.startup(loaded.snapshot, loaded.recoveryError)
+
+    assert.equal(service.submitIntent(updateIntent()), false)
+    assert.deepEqual(service.takeActions(), [])
+    assert.equal(service.getView().errors.at(-1).code, code)
+  }
+})
+
+test('restored prepared mutation becomes durable unknown before reconciliation', () => {
+  const service = runtime([entry()])
+  assert.equal(service.submitIntent(updateIntent()), true)
+  const prepared = service.takeActions()[0].snapshot
+  const restarted = createServiceRuntime({ Ledger, Coordinator, budgets })
+
+  restarted.startup(Store.deserialize(Store.serialize(prepared)).snapshot)
+
+  assert.equal(restarted.getView().operations[0].state, 'unknown')
+  assert.equal(restarted.getView().records['time-entry:9'].note, 'Changed locally')
+  assert.equal(restarted.getView().actions['time-entry:9'].canMutate, false)
+  const [save] = restarted.takeActions()
+  assert.equal(save.type, 'persist')
+  assert.equal(save.snapshot.operations[0].state, 'unknown')
+  assert.deepEqual(restarted.takeActions(), [])
+  restarted.storeSaved(save.transactionId)
+  const [read] = restarted.takeActions()
+  assert.equal(read.type, 'start')
+  assert.equal(read.request.requestKind, 'reconciliation')
+  assert.equal(read.request.argv[0], 'time')
+})
+
+test('partial CLI writes classify as unknown and enter ledger reconciliation', () => {
+  const service = runtime([entry()])
+  const request = persistThenStart(service, updateIntent())
+  const completion = Contract.classifyProcessOutcome(request, {
+    exitCode: 1,
+    exitStatus: 0,
+    stderr: JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: 'MUTATION_OUTCOME_UNKNOWN',
+        message: 'FreshBooks accepted part of the mutation',
+        outcomeUnknown: true,
+        details: { mutationKind: 'timer-update' }
+      }
+    })
+  })
+  assert.equal(completion.outcome, 'unknown')
+  service.adapterCompleted(completion)
+  const [save] = service.takeActions()
+  assert.equal(save.snapshot.operations[0].state, 'unknown')
+  assert.equal(service.getView().operations[0].state, 'unknown')
+  assert.equal(service.getView().records['time-entry:9'].note, 'Changed locally')
+  service.storeSaved(save.transactionId)
+  assert.equal(service.takeActions()[0].request.requestKind, 'reconciliation')
 })
 
 test('concurrent accepted intents serialize ledger store writes', () => {

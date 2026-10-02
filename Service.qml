@@ -131,13 +131,6 @@ Item {
     return result
   }
 
-  function cloneRecord(record) {
-    var copy = {}
-    var keys = Object.keys(record || {})
-    for (var i = 0; i < keys.length; i++) copy[keys[i]] = record[keys[i]]
-    return copy
-  }
-
   function submitRead(queryKey, argv, coverage, requestKind, responseKind) {
     return submitIntent({
       type: "refresh",
@@ -295,13 +288,11 @@ Item {
 
   function start(projectId, serviceId, note) {
     var now = new Date().toISOString()
-    var intended = {
-      contractVersion: 2, kind: "active-timer", id: "provisional", exists: true,
-      segments: [], state: "running", elapsedAnchor: { closedSeconds: 0, runningStartedAt: now, observedAt: now },
-      projectId: String(projectId), clientId: null, serviceId: serviceId === undefined ? null : String(serviceId),
-      note: String(note || ""), billable: false,
-      token: "0000000000000000000000000000000000000000000000000000000000000000"
-    }
+    var intended = Model.projectTimerIntent("start", null, {
+      projectId: projectId,
+      serviceId: serviceId,
+      note: note
+    }, now)
     var argv = ["timer", "start", "--project", intended.projectId]
     if (intended.serviceId !== null) argv.push("--service", intended.serviceId)
     if (intended.note !== "") argv.push("--note", intended.note)
@@ -311,8 +302,12 @@ Item {
 
   function timerIntent(type, patch, argv, commandClass) {
     if (!activeTimer) return false
+    var values = {}
+    if (type === "correct-duration") values.durationSeconds = Number(patch.duration)
+    if (type === "update-note") values.note = String(patch.note || "")
+    var intended = Model.projectTimerIntent(type, activeTimer, values, new Date().toISOString())
     return submitIntent({ type: type, scope: recordScope(activeTimer), base: activeTimer, baseToken: activeTimer.token,
-      patch: patch, draft: patch, argv: withGuard(argv, activeTimer), commandClass: commandClass || "multi-segment" })
+      intended: intended, patch: patch, draft: values, argv: withGuard(argv, activeTimer), commandClass: commandClass || "multi-segment" })
   }
 
   function pause() { return activeTimer && timerIntent("pause", { "timer-state": { state: "paused" } }, ["timer", "pause", "--id", String(activeTimer.id)]) }
@@ -326,11 +321,11 @@ Item {
 
   function switchTimer(projectId, serviceId, note) {
     if (!activeTimer) return start(projectId, serviceId, note)
-    var intended = cloneRecord(activeTimer)
-    intended.id = "provisional"
-    intended.projectId = String(projectId)
-    intended.serviceId = serviceId === undefined ? null : String(serviceId)
-    intended.note = String(note || "")
+    var intended = Model.projectTimerIntent("switch", activeTimer, {
+      projectId: projectId,
+      serviceId: serviceId,
+      note: note
+    }, new Date().toISOString())
     var argv = ["timer", "switch", "--project", intended.projectId]
     if (intended.serviceId !== null) argv.push("--service", intended.serviceId)
     if (intended.note !== "") argv.push("--note", intended.note)
@@ -416,7 +411,7 @@ Item {
   LedgerStore {
     id: ledgerStore
     onLoaded: function(snapshot, recoveryError, unreadText) {
-      root.runtime.startup(snapshot)
+      root.runtime.startup(snapshot, recoveryError)
       if (recoveryError) {
         root.lastErrorCode = String(recoveryError.code || "LEDGER_RECOVERY_FAILED")
         root.lastError = String(recoveryError.message || "The operation ledger could not be restored")

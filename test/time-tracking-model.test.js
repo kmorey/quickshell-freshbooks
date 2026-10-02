@@ -92,6 +92,66 @@ test('projects running elapsed from anchor without mutating record', () => {
   assert.equal(model.formatHoursMinutes(59), '00:00')
 })
 
+test('projects every timer intent as canonical logical timer state', () => {
+  const token = 'a'.repeat(64)
+  const base = {
+    contractVersion: 2, kind: 'active-timer', id: 'timer-1', exists: true,
+    segments: [{
+      contractVersion: 2, kind: 'timer-segment', id: 'segment-1', timerId: 'timer-1',
+      exists: true, startedAt: '2026-09-01T14:59:00.000Z', durationSeconds: null,
+      running: true, logged: false, token: 'b'.repeat(64)
+    }],
+    state: 'running',
+    elapsedAnchor: {
+      closedSeconds: 0,
+      runningStartedAt: '2026-09-01T14:59:00.000Z',
+      observedAt: '2026-09-01T15:00:00.000Z'
+    },
+    projectId: '44', clientId: '55', serviceId: '66', note: 'Build',
+    billable: true, token
+  }
+  const now = '2026-09-01T15:01:00.000Z'
+  const paused = model.projectTimerIntent('pause', base, {}, now)
+  assert.equal(paused.state, 'paused')
+  assert.equal(paused.segments[0].durationSeconds, 120)
+  assert.equal(paused.segments[0].running, false)
+  assert.deepEqual(paused.elapsedAnchor, {
+    closedSeconds: 120, runningStartedAt: null, observedAt: now
+  })
+
+  const resumed = model.projectTimerIntent('resume', paused, {}, now)
+  assert.equal(resumed.state, 'running')
+  assert.equal(resumed.segments.length, 2)
+  assert.equal(resumed.segments[1].timerId, 'timer-1')
+  assert.equal(resumed.segments[1].running, true)
+  assert.equal(resumed.elapsedAnchor.runningStartedAt, now)
+
+  const corrected = model.projectTimerIntent('correct-duration', base, { durationSeconds: 30 }, now)
+  assert.equal(corrected.elapsedAnchor.closedSeconds, 0)
+  assert.equal(corrected.elapsedAnchor.runningStartedAt, '2026-09-01T15:00:30.000Z')
+  assert.equal(corrected.segments[0].startedAt, '2026-09-01T15:00:30.000Z')
+  assert.equal(Object.hasOwn(corrected, 'durationSeconds'), false)
+
+  const noted = model.projectTimerIntent('update-note', base, { note: 'Changed' }, now)
+  assert.equal(noted.note, 'Changed')
+  for (const type of ['log', 'discard']) {
+    assert.deepEqual(model.projectTimerIntent(type, base, {}, now), {
+      contractVersion: 2, kind: 'active-timer', id: 'timer-1', exists: false, token: null
+    })
+  }
+
+  for (const type of ['start', 'switch']) {
+    const started = model.projectTimerIntent(type, type === 'switch' ? base : null, {
+      projectId: '77', serviceId: '88', note: 'Next'
+    }, now)
+    assert.equal(started.id, 'provisional')
+    assert.equal(started.segments.length, 1)
+    assert.equal(started.segments[0].timerId, 'provisional')
+    assert.equal(started.state, 'running')
+    assert.equal(started.elapsedAnchor.runningStartedAt, now)
+  }
+})
+
 test('sums unique Timer Segments for the full resumed Active Timer duration', () => {
   const nowMs = Date.parse('2026-09-03T15:00:00Z')
   const timer = {

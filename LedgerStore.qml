@@ -12,6 +12,7 @@ Item {
   property string unreadText: ""
   property bool ready: false
   property string _pendingTransactionId: ""
+  readonly property bool recoveryLocked: recoveryError !== null
 
   signal loaded(var snapshot, var recoveryError, string unreadText)
   signal saved(string transactionId)
@@ -27,6 +28,10 @@ Item {
 
   function save(snapshot, transactionId) {
     var id = String(transactionId || "")
+    if (recoveryLocked) {
+      failed(id, { code: "LEDGER_RECOVERY_LOCKED", message: "Recover the unread ledger before saving." })
+      return
+    }
     if (_pendingTransactionId !== "") {
       failed(id, { code: "LEDGER_WRITE_BUSY", message: "A ledger write is already pending." })
       return

@@ -258,6 +258,111 @@ function logicalTimerElapsedSeconds(timer, nowMs) {
   return Math.max(confirmed, total)
 }
 
+function cloneValue(value) {
+  if (Array.isArray(value)) {
+    var values = []
+    for (var i = 0; i < value.length; i++) values.push(cloneValue(value[i]))
+    return values
+  }
+  if (!value || typeof value !== "object") return value
+  var result = {}
+  var keys = Object.keys(value)
+  for (var j = 0; j < keys.length; j++) result[keys[j]] = cloneValue(value[keys[j]])
+  return result
+}
+
+function provisionalTimer(values, observedAt) {
+  var token = "0000000000000000000000000000000000000000000000000000000000000000"
+  return {
+    contractVersion: 2,
+    kind: "active-timer",
+    id: "provisional",
+    exists: true,
+    segments: [{
+      contractVersion: 2,
+      kind: "timer-segment",
+      id: "provisional-segment",
+      timerId: "provisional",
+      exists: true,
+      startedAt: observedAt,
+      durationSeconds: null,
+      running: true,
+      logged: false,
+      token: token
+    }],
+    state: "running",
+    elapsedAnchor: { closedSeconds: 0, runningStartedAt: observedAt, observedAt: observedAt },
+    projectId: String(values.projectId),
+    clientId: null,
+    serviceId: values.serviceId === undefined || values.serviceId === null ? null : String(values.serviceId),
+    note: String(values.note || ""),
+    billable: false,
+    token: token
+  }
+}
+
+function projectTimerIntent(type, base, values, observedAt) {
+  values = values || {}
+  var now = String(observedAt)
+  if (type === "start" || type === "switch") return provisionalTimer(values, now)
+  if (!base || base.kind !== "active-timer" || base.exists === false) return null
+  if (type === "log" || type === "discard") return {
+    contractVersion: 2, kind: "active-timer", id: String(base.id), exists: false, token: null
+  }
+
+  var intended = cloneValue(base)
+  intended.elapsedAnchor.observedAt = now
+  if (type === "update-note") {
+    intended.note = String(values.note || "")
+    return intended
+  }
+  if (type === "pause") {
+    var total = projectElapsedSeconds(base, Date.parse(now))
+    for (var i = 0; i < intended.segments.length; i++) {
+      var segment = intended.segments[i]
+      if (!segment.running) continue
+      segment.durationSeconds = Math.max(0,
+        Math.floor((Date.parse(now) - Date.parse(segment.startedAt)) / 1000))
+      segment.running = false
+    }
+    intended.state = "paused"
+    intended.elapsedAnchor.closedSeconds = total
+    intended.elapsedAnchor.runningStartedAt = null
+    return intended
+  }
+  if (type === "resume") {
+    var segmentId = String(base.id) + "-provisional-" + String(intended.segments.length + 1)
+    intended.segments.push({
+      contractVersion: 2, kind: "timer-segment", id: segmentId, timerId: String(base.id),
+      exists: true, startedAt: now, durationSeconds: null, running: true, logged: false,
+      token: "0000000000000000000000000000000000000000000000000000000000000000"
+    })
+    intended.state = "running"
+    intended.elapsedAnchor.runningStartedAt = now
+    return intended
+  }
+  if (type === "correct-duration") {
+    var target = integerSeconds(values.durationSeconds)
+    if (intended.state === "running") {
+      var closed = intended.elapsedAnchor.closedSeconds
+      var startedAt = new Date(Date.parse(now) - Math.max(0, target - closed) * 1000).toISOString()
+      for (var j = 0; j < intended.segments.length; j++) {
+        if (intended.segments[j].running) intended.segments[j].startedAt = startedAt
+      }
+      intended.elapsedAnchor.runningStartedAt = startedAt
+    } else {
+      var prior = 0
+      for (var k = 0; k < intended.segments.length - 1; k++)
+        prior += integerSeconds(intended.segments[k].durationSeconds)
+      if (intended.segments.length > 0)
+        intended.segments[intended.segments.length - 1].durationSeconds = Math.max(0, target - prior)
+      intended.elapsedAnchor.closedSeconds = target
+    }
+    return intended
+  }
+  return intended
+}
+
 function formatDuration(seconds) {
   var value = integerSeconds(seconds)
   var hours = Math.floor(value / 3600)
@@ -445,6 +550,7 @@ if (typeof module !== "undefined") module.exports = {
   logicalTimerElapsedSeconds: logicalTimerElapsedSeconds,
   parseDurationInput: parseDurationInput,
   projectElapsedSeconds: projectElapsedSeconds,
+  projectTimerIntent: projectTimerIntent,
   projectShortcuts: projectShortcuts,
   entriesForDay: entriesForDay,
   parseDateKey: parseDateKey,

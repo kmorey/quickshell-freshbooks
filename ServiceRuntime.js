@@ -32,6 +32,7 @@ function createServiceRuntime(options) {
   var refreshSequence = 0
   var activePersistId = null
   var pendingPersists = []
+  var recoveryError = null
 
 
   function publishView() {
@@ -39,11 +40,16 @@ function createServiceRuntime(options) {
     var keys = Object.keys(ledgerView)
     for (var i = 0; i < keys.length; i++) next[keys[i]] = ledgerView[keys[i]]
     next.projects = projects
+    if (recoveryError) {
+      next.errors = Array.isArray(ledgerView.errors) ? ledgerView.errors.slice() : []
+      next.errors.push(recoveryError)
+    }
     view = Object.freeze(next)
   }
 
   publishView()
   function queuePersist(effect) {
+    if (recoveryError) return
     var action = {
       type: "persist",
       snapshot: effect.snapshot,
@@ -194,13 +200,20 @@ function createServiceRuntime(options) {
     submitIntent: function(intent) {
       if (!intent || typeof intent.type !== "string") return false
       if (intent.type === "refresh") return submitRefresh(intent)
+      if (recoveryError) return false
       var previousState = ledgerState
       var result = applyLedger({ type: "intent", intent: intent })
       return result.state !== previousState
     },
 
-    startup: function(snapshot) {
-      var restored = snapshot ? Ledger.restore(snapshot) : null
+    startup: function(snapshot, startupRecoveryError) {
+      recoveryError = startupRecoveryError ? immutableCopy({
+        code: String(startupRecoveryError.code || "LEDGER_RECOVERY_FAILED"),
+        message: String(startupRecoveryError.message || "The operation ledger could not be restored"),
+        persistent: true,
+        actionable: true
+      }) : null
+      var restored = snapshot && !recoveryError ? Ledger.restore(snapshot) : null
       ledgerState = restored || Ledger.initialState()
       coordinatorState = Coordinator.initialState(options.budgets)
       actions = []

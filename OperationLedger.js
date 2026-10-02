@@ -1081,7 +1081,7 @@ function startup(state) {
   var changed = false
   for (var i = 0; i < next.operations.length; i++) {
     var operation = next.operations[i]
-    if (operation.state === "in-flight") {
+    if (operation.state === "prepared" || operation.state === "in-flight") {
       operation.state = "unknown"
       changed = true
     } else if (operation.state === "unknown") effects.push(reconciliationRequest(operation))
@@ -1090,11 +1090,12 @@ function startup(state) {
     next.revision += 1
     var snapshot = durableSnapshot(next)
     for (var j = 0; j < next.operations.length; j++)
-      if (state.operations[j].state === "in-flight") effects.push({
-        type: "persist",
-        transactionId: "unknown-" + next.operations[j].operationId,
-        snapshot: snapshot
-      })
+      if (state.operations[j].state === "prepared" || state.operations[j].state === "in-flight")
+        effects.push({
+          type: "persist",
+          transactionId: "unknown-" + next.operations[j].operationId,
+          snapshot: snapshot
+        })
   }
   return result(next, effects)
 }
