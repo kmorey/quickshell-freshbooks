@@ -42,6 +42,29 @@ npm test
 omarchy plugin validate .
 ```
 
+The final development gate is an opt-in real-QML smoke. Run it only from an
+Omarchy graphical session and isolate Quickshell's persisted state:
+
+```bash
+state_root=$(mktemp -d)
+cache_root=$(mktemp -d)
+SMOOTH_SETTLEMENT_SMOKE=1 \
+  XDG_STATE_HOME="$state_root" \
+  XDG_CACHE_HOME="$cache_root" \
+  quickshell -p test/SmokeHarness.qml
+```
+
+The harness is never selected by production startup and refuses to run without
+`SMOOTH_SETTLEMENT_SMOKE=1`. It uses the production `Service`, `ServiceRuntime`,
+`Panel`, and `LedgerStore` with synthetic responses from `FakeCliAdapter`.
+Follow the visible `SMOKE-1` through `SMOKE-7` rows in order. Use the actual
+Panel conflict controls: pointer-select **Mine** for note, keyboard-select
+**FreshBooks** for duration, pointer-select **Restore as new**, and
+keyboard-select **Discard local**. Capture readable screenshots plus a short
+interaction recording, including the isolated state/cache roots and tested
+revision in private validation metadata. Any red row exits nonzero; the gate is
+not replaceable by the Node suite, source scans, or mocked rendering.
+
 The panel uses Omarchy's shared buttons, cursor surfaces, section headings, hero layout, and theme tokens so interaction states follow the rest of the shell. The Node suite covers calendar/date behavior, timer projections, duration parsing, project/service recency, canonical contract validation, durable operation recovery, request coordination, the fake CLI seam, the production Service runtime, and packaging contracts. CI also executes the real `freshbooks-cli` diagnostics command and requires CLI 0.3.0 with canonical contract 2 before validating the plugin manifest. A complete release also requires an Omarchy/Quickshell runtime smoke test because Node cannot instantiate QML; keyboard/pointer interaction and horizontal, vertical, narrow, and multi-monitor layouts remain part of that manual gate.
 
 ## Privacy

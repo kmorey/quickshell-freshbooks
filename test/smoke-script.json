@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic, synthetic-only settlement smoke data. Never replace with customer data.",
+  "steps": [
+    {
+      "requestKind": "quiet-read",
+      "scope": null,
+      "outcome": "observation",
+      "data": {
+        "version": "0.3.0",
+        "configured": true,
+        "authenticated": true,
+        "businessSelected": true,
+        "timezone": "UTC",
+        "localDate": "2026-10-01",
+        "canonicalContractVersion": 2,
+        "commandBudgetsMs": { "read": 64000, "singleWrite": 128000, "multiSegment": 320000, "log": 192000, "switch": 320000 },
+        "capabilities": ["semantic-guards", "canonical-tracking-v2", "mutation-receipts"]
+      }
+    },
+    {
+      "requestKind": "visible-read",
+      "scope": null,
+      "outcome": "observation",
+      "data": {
+        "records": [
+          { "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Planning", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          { "contractVersion": 2, "kind": "time-entry", "id": "10", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T10:00:00.000Z", "durationSeconds": 1800, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Deletion restore", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          { "contractVersion": 2, "kind": "time-entry", "id": "11", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T11:00:00.000Z", "durationSeconds": 1200, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Unknown restart", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          { "contractVersion": 2, "kind": "time-entry", "id": "12", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T11:30:00.000Z", "durationSeconds": 900, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Deletion discard", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          { "contractVersion": 2, "kind": "active-timer", "id": "timer-1", "exists": true, "segments": [{ "contractVersion": 2, "kind": "timer-segment", "id": "segment-1", "timerId": "timer-1", "exists": true, "startedAt": "2026-10-01T12:00:00.000Z", "durationSeconds": null, "running": true, "logged": false, "token": "1111111111111111111111111111111111111111111111111111111111111111" }], "state": "running", "elapsedAnchor": { "closedSeconds": 120, "runningStartedAt": "2026-10-01T12:00:00.000Z", "observedAt": "2026-10-01T12:00:00.000Z" }, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Running anchor", "billable": true, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+        ],
+        "coverage": { "kind": null, "identity": null, "from": null, "to": null, "complete": true, "includesDeleted": true },
+        "cached": false,
+        "phase": null
+      }
+    },
+    {
+      "requestKind": "visible-read",
+      "scope": null,
+      "outcome": "observation",
+      "delayMs": 1200,
+      "data": {
+        "records": [{ "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Planning", "billable": true, "billed": false, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+        "coverage": { "kind": "time-entry", "identity": null, "from": "2026-10-01", "to": "2026-10-01", "complete": true, "includesDeleted": true },
+        "cached": false,
+        "phase": null
+      }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:9",
+      "outcome": "receipt",
+      "data": {
+        "contractVersion": 2,
+        "mutationKind": "time-entry-update",
+        "changes": [{ "scope": "time-entry:9", "before": { "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "after": { "record": { "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Local optimistic", "billable": true, "billed": false, "token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } }],
+        "results": [{ "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 3600, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Local optimistic", "billable": true, "billed": false, "token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+        "phase": null
+      }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:9",
+      "outcome": "known-error",
+      "error": { "code": "GUARD_REJECTED", "message": "Entry changed in FreshBooks", "details": { "contractVersion": 2, "identity": { "kind": "time-entry", "id": "9" }, "expectedToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "currentToken": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "current": { "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 5400, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Remote note", "billable": true, "billed": false, "token": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" } } }
+    },
+    {
+      "requestKind": "quiet-read",
+      "scope": null,
+      "outcome": "observation",
+      "data": {
+        "records": [{ "contractVersion": 2, "kind": "active-timer", "id": "timer-1", "exists": true, "segments": [{ "contractVersion": 2, "kind": "timer-segment", "id": "segment-1", "timerId": "timer-1", "exists": true, "startedAt": "2026-10-01T12:00:00.000Z", "durationSeconds": null, "running": true, "logged": false, "token": "1111111111111111111111111111111111111111111111111111111111111111" }], "state": "running", "elapsedAnchor": { "closedSeconds": 120, "runningStartedAt": "2026-10-01T12:00:00.000Z", "observedAt": "2026-10-01T12:00:00.000Z" }, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Running anchor", "billable": true, "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+        "coverage": { "kind": "active-timer", "identity": null, "from": null, "to": null, "complete": true, "includesDeleted": true },
+        "cached": false,
+        "phase": null
+      }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:9",
+      "outcome": "receipt",
+      "data": { "contractVersion": 2, "mutationKind": "time-entry-update", "changes": [{ "scope": "time-entry:9", "before": { "token": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" }, "after": { "record": { "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 5400, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Mine note", "billable": true, "billed": false, "token": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" } } }], "results": [{ "contractVersion": 2, "kind": "time-entry", "id": "9", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T09:00:00.000Z", "durationSeconds": 5400, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Mine note", "billable": true, "billed": false, "token": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }], "phase": null }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:10",
+      "outcome": "known-error",
+      "error": { "code": "GUARD_REJECTED", "message": "Entry was deleted in FreshBooks", "details": { "contractVersion": 2, "identity": { "kind": "time-entry", "id": "10" }, "expectedToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "currentToken": null, "current": { "contractVersion": 2, "kind": "time-entry", "id": "10", "exists": false, "token": null } } }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "provisional:operation-5:time-entry-create",
+      "outcome": "receipt",
+      "data": { "contractVersion": 2, "mutationKind": "time-entry-create", "changes": [{ "scope": "time-entry:110", "before": { "absent": true }, "after": { "record": { "contractVersion": 2, "kind": "time-entry", "id": "110", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T10:00:00.000Z", "durationSeconds": 1800, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Restore me", "billable": false, "billed": false, "token": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" } } }], "results": [{ "contractVersion": 2, "kind": "time-entry", "id": "110", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T10:00:00.000Z", "durationSeconds": 1800, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Restore me", "billable": false, "billed": false, "token": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }], "phase": null }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:12",
+      "outcome": "known-error",
+      "error": { "code": "GUARD_REJECTED", "message": "Entry was deleted in FreshBooks", "details": { "contractVersion": 2, "identity": { "kind": "time-entry", "id": "12" }, "expectedToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "currentToken": null, "current": { "contractVersion": 2, "kind": "time-entry", "id": "12", "exists": false, "token": null } } }
+    },
+    {
+      "requestKind": "mutation",
+      "scope": "time-entry:11",
+      "outcome": "unknown",
+      "error": { "code": "TIMEOUT", "message": "Synthetic timeout after dispatch" }
+    },
+    {
+      "requestKind": "reconciliation",
+      "scope": "time-entry:11",
+      "outcome": "observation",
+      "delayMs": 600,
+      "data": { "records": [{ "contractVersion": 2, "kind": "time-entry", "id": "11", "exists": true, "localDate": "2026-10-01", "startedAt": "2026-10-01T11:00:00.000Z", "durationSeconds": 1200, "projectId": "44", "clientId": "55", "serviceId": "66", "note": "Unknown local", "billable": true, "billed": false, "token": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" }], "coverage": { "kind": "time-entry", "identity": { "kind": "time-entry", "id": "11" }, "from": null, "to": null, "complete": true, "includesDeleted": true }, "cached": false, "phase": null }
+    },
+    {
+      "requestKind": "quiet-read",
+      "scope": null,
+      "outcome": "observation",
+      "data": {
+        "version": "0.3.0",
+        "configured": true,
+        "authenticated": true,
+        "businessSelected": true,
+        "timezone": "UTC",
+        "localDate": "2026-10-01",
+        "canonicalContractVersion": 2,
+        "commandBudgetsMs": { "read": 64000, "singleWrite": 128000, "multiSegment": 320000, "log": 192000, "switch": 320000 },
+        "capabilities": ["semantic-guards", "canonical-tracking-v2", "mutation-receipts"]
+      }
+    }
+  ]
+}
