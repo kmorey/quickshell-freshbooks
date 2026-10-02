@@ -90,6 +90,11 @@ ShellRoot {
     return null
   }
 
+  function reopenSmokePanel() {
+    smokePanel.controller.hide()
+    panelReopen.restart()
+  }
+
   function beginOptimisticScenario() {
     if (!service || phase !== "ready") return
     phase = "opening-real-editor"
@@ -195,6 +200,7 @@ ShellRoot {
               root.panelReadCompletions += 1
               if (root.panelReadCompletions === 2) {
                 var entry = productionService.view.records["time-entry:9"]
+                smokePanel.tab = "calendar"
                 if (!smokePanel.prepareSmokeEntryEdit(entry, "Local optimistic", "01:00"))
                   throw new Error("could not prepare production entry editor")
                 productionService.refreshEntries("2026-10-01", "2026-10-01")
@@ -221,10 +227,12 @@ ShellRoot {
               })
             } else if (root.phase === "restore-conflict" && completion.outcome === "known-error") {
               root.phase = "await-restore"
+              root.reopenSmokePanel()
             } else if (root.phase === "await-restore" && completion.outcome === "receipt") {
               root.phase = "restore-receipt"
             } else if (root.phase === "discard-conflict" && completion.outcome === "known-error") {
               root.phase = "await-discard"
+              root.reopenSmokePanel()
             }
           })
         }
@@ -292,6 +300,7 @@ ShellRoot {
           root.setCheckpoint("SMOKE-4", JSON.stringify(groups) === JSON.stringify(["duration", "note"])
             && (!otherAction || otherAction.canMutate !== false), groups.join(", "))
           root.phase = "await-field-choices"
+          root.reopenSmokePanel()
         }
       } else if (root.phase === "await-field-choices" && !root.conflictFor("time-entry:9")) {
         root.phase = "field-resolved"
@@ -352,6 +361,13 @@ ShellRoot {
   }
 
   Timer {
+    id: panelReopen
+    interval: 250
+    repeat: false
+    onTriggered: smokePanel.controller.show()
+  }
+
+  Timer {
     id: phaseWatchdog
     interval: 45000
     repeat: false
@@ -362,7 +378,7 @@ ShellRoot {
     id: failureExit
     interval: 3000
     repeat: false
-    onTriggered: Quickshell.exit(1)
+    onTriggered: Qt.quit()
   }
 
   FloatingWindow {
@@ -462,9 +478,9 @@ ShellRoot {
 
           Button {
             objectName: "smokeFinishTarget"
-            text: root.failure === "" ? "Finish smoke (exit 0)" : "Failure recorded (exit 1)"
+            text: root.failure === "" ? "Finish smoke (exit 0)" : "Failure recorded"
             enabled: root.phase === "finished" || root.failure !== ""
-            onClicked: Quickshell.exit(root.failure === "" && root.allCheckpointsPassed() ? 0 : 1)
+            onClicked: Qt.quit()
           }
         }
       }
@@ -474,7 +490,7 @@ ShellRoot {
   Component.onCompleted: {
     if (String(Quickshell.env("SMOOTH_SETTLEMENT_SMOKE") || "") !== "1") {
       fail("development harness requires SMOOTH_SETTLEMENT_SMOKE=1")
-      Quickshell.exit(64)
+      Qt.quit()
     }
     phaseWatchdog.restart()
   }

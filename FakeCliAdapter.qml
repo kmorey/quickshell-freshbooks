@@ -52,7 +52,7 @@ Item {
       completed(finished.completion)
       stepCompleted(request, finished.completion, finished.state.script.length)
     }
-    if (autoStart) startNext()
+    if (autoStart) Qt.callLater(startNext)
     return finished.completion !== null
   }
 
@@ -66,6 +66,7 @@ Item {
   function cancelRead(requestId) {
     var transition = FakeCliModel.cancelRead(modelState, requestId)
     modelState = transition.state
+    if (transition.canceled && autoComplete) completionTimer.restart()
     return transition.canceled
   }
 }
