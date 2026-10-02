@@ -378,6 +378,48 @@ ShellRoot {
     onTriggered: Qt.exit(1)
   }
 
+  Shortcut {
+    sequence: "Ctrl+1"
+    enabled: root.phase === "ready"
+    onActivated: root.runAction("open production editor", root.beginOptimisticScenario)
+  }
+  Shortcut {
+    sequence: "Ctrl+4"
+    enabled: root.phase === "optimistic-settled"
+    onActivated: root.runAction("start field conflict", root.beginConflictScenario)
+  }
+  Shortcut {
+    sequence: "Ctrl+5"
+    enabled: root.phase === "field-resolved"
+    onActivated: root.runAction("start restore conflict", root.beginRestoreConflict)
+  }
+  Shortcut {
+    sequence: "Ctrl+Shift+5"
+    enabled: root.phase === "restore-receipt"
+    onActivated: root.runAction("start discard conflict", root.beginDiscardConflict)
+  }
+  Shortcut {
+    sequence: "Ctrl+6"
+    enabled: root.phase === "deletions-resolved"
+    onActivated: root.runAction("start unknown restart", root.beginUnknownRestart)
+  }
+  Shortcut {
+    sequence: "Ctrl+7"
+    enabled: root.checkpoints[5].state === "PASS" && root.fake && !root.fake.busy
+      && root.remainingScript.length === 0 && root.phase !== "ticking"
+    onActivated: root.runAction("start running tick", root.beginTickProof)
+  }
+  Shortcut {
+    sequence: "Ctrl+P"
+    enabled: ["await-field-choices", "await-restore", "await-discard"].indexOf(root.phase) !== -1
+    onActivated: root.runAction("show production targets", root.showSmokeTargets)
+  }
+  Shortcut {
+    sequence: "Ctrl+Return"
+    enabled: root.phase === "finished"
+    onActivated: Qt.exit(0)
+  }
+
   FloatingWindow {
     id: dashboard
     visible: true
@@ -447,7 +489,7 @@ ShellRoot {
             }
           }
 
-          Label { text: "Use Tab/Shift+Tab and Enter/Space for the keyboard path; click the same controls for the pointer path."; color: "#d8dee9"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+          Label { text: "Production choices: Tab/Shift+Tab and Enter/Space. Harness steps: Ctrl+1/4/5/Shift+5/6/7, Ctrl+P to show Panel targets, Ctrl+Enter to finish."; color: "#d8dee9"; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
           Flow {
             Layout.fillWidth: true

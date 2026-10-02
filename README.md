@@ -50,8 +50,10 @@ test/run-smoke.sh
 ```
 
 The launcher stages the repository beside Omarchy's `Commons` and `Ui` modules,
-creates isolated state/cache roots unless the caller supplies them, prints the
-tested revision and roots, and removes only its temporary QML stage on exit.
+creates isolated state/cache roots, prints the tested revision and roots, and
+removes only its temporary QML stage on exit. Set
+`SMOOTH_SETTLEMENT_STATE_ROOT` and `SMOOTH_SETTLEMENT_CACHE_ROOT` to preserve
+state in explicit alternate locations.
 
 The harness is never selected by production startup and refuses to run without
 `SMOOTH_SETTLEMENT_SMOKE=1`. It uses the production `Service`, `ServiceRuntime`,

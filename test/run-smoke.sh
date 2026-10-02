@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 omarchy_shell="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
 stage_root=$(mktemp -d)
-state_root=${XDG_STATE_HOME:-$(mktemp -d)}
-cache_root=${XDG_CACHE_HOME:-$(mktemp -d)}
+state_root=${SMOOTH_SETTLEMENT_STATE_ROOT:-$(mktemp -d)}
+cache_root=${SMOOTH_SETTLEMENT_CACHE_ROOT:-$(mktemp -d)}
 
 cleanup() {
   rm -rf "$stage_root"
