@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "kmorey.freshbooks-time",
   "name": "FreshBooks Time",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Kevin Morey",
   "description": "FreshBooks timer, project shortcuts, and calendar review",
   "kinds": [

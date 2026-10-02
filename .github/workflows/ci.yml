@@ -16,6 +16,30 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+      - name: Verify freshbooks-cli release contract
+        run: |
+          git clone --depth 1 https://github.com/kmorey/freshbooks-cli.git "$RUNNER_TEMP/freshbooks-cli"
+          state_dir="$(mktemp -d)"
+          diagnostics="$(
+            XDG_CONFIG_HOME="$state_dir/config" \
+            XDG_DATA_HOME="$state_dir/data" \
+            XDG_STATE_HOME="$state_dir/state" \
+            HOME="$state_dir/home" \
+            node "$RUNNER_TEMP/freshbooks-cli/bin/freshbooks.js" diagnostics status --json
+          )"
+          DIAGNOSTICS="$diagnostics" node <<'NODE'
+          const assert = require('node:assert/strict')
+          const envelope = JSON.parse(process.env.DIAGNOSTICS)
+          assert.equal(envelope.schemaVersion, 1)
+          assert.equal(envelope.ok, true)
+          const version = /^(\d+)\.(\d+)\.(\d+)$/.exec(envelope.data.version)
+          assert.ok(version, `invalid CLI version: ${envelope.data.version}`)
+          const [major, minor] = version.slice(1).map(Number)
+          assert.ok(major > 0 || minor >= 3, `freshbooks-cli ${envelope.data.version} is older than 0.3.0`)
+          assert.equal(envelope.data.canonicalContractVersion, 2)
+          assert.equal(envelope.data.capabilities.includes('canonical-tracking-v2'), true)
+          assert.equal(envelope.data.capabilities.includes('mutation-receipts'), true)
+          NODE
       - name: Validate Omarchy plugin manifest
         run: |
           curl -fsSL https://raw.githubusercontent.com/omacom/omarchy/b71dcad96e9d0b2962b7d225828a5cb6000ad720/bin/omarchy-plugin-validate -o /tmp/omarchy-plugin-validate

@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..')
 
 test('declares one installable service plus bar-widget plugin', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.version, '0.2.0')
   assert.equal(manifest.schemaVersion, 1)
   assert.equal(manifest.id, 'kmorey.freshbooks-time')
   assert.deepEqual(manifest.kinds, ['service', 'bar-widget'])
