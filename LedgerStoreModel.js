@@ -420,10 +420,12 @@ function validCreationBaseline(value, operation) {
   } else if (value.queryKey !== "active-timer"
       || value.coverage.from !== null || value.coverage.to !== null) return false
   var seen = {}
+  var identityPrefix = expectedKind + ":"
   for (var i = 0; i < value.identities.length; i++) {
     var identity = value.identities[i]
-    if (!isString(identity) || identity === expectedKind + ":provisional"
-        || identity.indexOf(expectedKind + ":") !== 0 || seen[identity]) return false
+    if (!isString(identity) || identity.indexOf(identityPrefix) !== 0
+        || !isId(identity.slice(identityPrefix.length))
+        || identity === identityPrefix + "provisional" || seen[identity]) return false
     seen[identity] = true
   }
   return true

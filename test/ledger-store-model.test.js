@@ -217,6 +217,7 @@ test('malformed creation baseline is corrupt and preserves unread bytes', () => 
     value => { value.operations[0].creationBaseline.coverage.from = '2026-09-01' },
     value => { value.operations[0].creationBaseline.coverage.to = '2026-09-03' },
     value => { value.operations[0].creationBaseline.identities = ['time-entry:provisional'] },
+    value => { value.operations[0].creationBaseline.identities = ['time-entry:'] },
     value => { delete value.operations[0].creationBaseline }
   ]
   function assertCorrupt(value) {
