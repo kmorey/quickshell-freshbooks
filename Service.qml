@@ -434,8 +434,8 @@ Item {
 
   Timer {
     interval: 15000
-    repeat: true
-    running: root.hasVisibleConsumers
+    repeat: false
+    running: root.hasVisibleConsumers && !root.busy
     onTriggered: {
       root.refresh()
       if (root.lastEntryFrom !== "" || root.lastEntryTo !== "") root.refreshEntries(root.lastEntryFrom, root.lastEntryTo)

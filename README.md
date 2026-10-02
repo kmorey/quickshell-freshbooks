@@ -13,7 +13,7 @@ Accepted edits update the panel immediately and close an open entry editor while
 
 If a write times out or otherwise has an unknown outcome, the plugin never retries it automatically. It keeps the affected record locked, preserves the draft and projection across restart, and performs a deletion-aware reconciliation read; unrelated records remain usable. When FreshBooks changed the same record, conflicts are shown by semantic field group—note, duration, date, assignment, or timer state—so each group can use **Mine** or **FreshBooks**. If FreshBooks deleted a locally edited record, choose **Restore as new** to create a fresh record without reusing the deleted identity, or **Discard local** to accept the deletion.
 
-FreshBooks remains authoritative. The plugin refreshes when opened, after mutations that still require reconciliation, and every 15 seconds while visible. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
+FreshBooks remains authoritative. The plugin refreshes when opened, after mutations that still require reconciliation, and 15 seconds after the previous visible refresh settles. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
 
 ## Requirements
 
