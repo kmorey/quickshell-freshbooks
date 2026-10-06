@@ -350,19 +350,7 @@ Panel {
   }
 
   function recordStatus(scope) {
-    var wanted = String(scope || "")
-    for (var i = conflicts.length - 1; i >= 0; i--)
-      if (String(conflicts[i].scope || "") === wanted) return "conflict"
-    for (var j = operations.length - 1; j >= 0; j--) {
-      var operation = operations[j]
-      if (String(operation.scope || "") !== wanted) continue
-      if (operation.state === "unknown") return "unknown"
-      if (["prepared", "in-flight", "rebasing"].indexOf(operation.state) !== -1) return "settling"
-      if (operation.state === "not-applied") return "error"
-    }
-    for (var k = errors.length - 1; k >= 0; k--)
-      if (String(errors[k].scope || "") === wanted) return "error"
-    return ""
+    return Model.recordStatus(scope, operations, conflicts, errors)
   }
 
   function recordStatusLabel(record) {

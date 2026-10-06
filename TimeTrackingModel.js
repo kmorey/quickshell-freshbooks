@@ -555,6 +555,27 @@ function recentProjectOrder(projects, entries, activeProjectId) {
   return result
 }
 
+function recordStatus(scope, operations, conflicts, errors) {
+  var wanted = String(scope || "")
+  var currentConflicts = asArray(conflicts)
+  for (var i = currentConflicts.length - 1; i >= 0; i--)
+    if (String(currentConflicts[i].scope || "") === wanted) return "conflict"
+  var history = asArray(operations)
+  for (var j = history.length - 1; j >= 0; j--) {
+    var operation = history[j]
+    if (String(operation.scope || "") !== wanted) continue
+    // A confirmed newer save ends this record's failure history.
+    if (operation.state === "settled") return ""
+    if (operation.state === "unknown") return "unknown"
+    if (["prepared", "in-flight", "rebasing"].indexOf(operation.state) !== -1) return "settling"
+    if (operation.state === "not-applied") return "error"
+  }
+  var currentErrors = asArray(errors)
+  for (var k = currentErrors.length - 1; k >= 0; k--)
+    if (String(currentErrors[k].scope || "") === wanted) return "error"
+  return ""
+}
+
 if (typeof module !== "undefined") module.exports = {
   addDays: addDays,
   aggregateEntries: aggregateEntries,
@@ -577,6 +598,7 @@ if (typeof module !== "undefined") module.exports = {
   parseDateKey: parseDateKey,
   recentProjectOrder: recentProjectOrder,
   recentShortcutOrder: recentShortcutOrder,
+  recordStatus: recordStatus,
   readableContentRole: readableContentRole,
   searchProjects: searchProjects,
   searchShortcuts: searchShortcuts,

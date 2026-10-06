@@ -310,3 +310,28 @@ test('orders each Project Shortcut by its exact project and service recency', ()
     [2, 21]
   ])
 })
+
+test('a later successful save clears an older record failure without clearing other records', () => {
+  const timer = 'active-timer:42'
+  const other = 'time-entry:9'
+  const operations = [
+    { scope: timer, state: 'not-applied' },
+    { scope: other, state: 'not-applied' }
+  ]
+  const errors = [{ scope: timer }, { scope: other }]
+  assert.equal(model.recordStatus(timer, operations, [], errors), 'error')
+  operations.push({ scope: timer, state: 'in-flight' })
+  assert.equal(model.recordStatus(timer, operations, [], errors), 'settling')
+  operations[2].state = 'settled'
+  assert.equal(model.recordStatus(timer, operations, [], errors), '')
+  assert.equal(model.recordStatus(other, operations, [], errors), 'error')
+})
+
+test('new uncertainty and active conflicts remain visible after an older successful save', () => {
+  const scope = 'active-timer:42'
+  const operations = [{ scope, state: 'settled' }, { scope, state: 'unknown' }]
+  assert.equal(model.recordStatus(scope, operations, [], []), 'unknown')
+  assert.equal(model.recordStatus(scope, operations, [{ scope }], []), 'conflict')
+  operations[1].state = 'not-applied'
+  assert.equal(model.recordStatus(scope, operations, [], []), 'error')
+})
