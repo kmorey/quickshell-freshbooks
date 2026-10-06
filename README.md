@@ -42,6 +42,18 @@ npm test
 omarchy plugin validate .
 ```
 
+Verify the real ledger file-completion lifecycle from a graphical session:
+
+```bash
+node --test test/ledger-store-runtime.test.js
+```
+
+This isolated Quickshell check covers saves started by load/save callbacks and
+unchanged snapshots, then verifies the durable file. Ledger writes defer until
+the previous FileView callback returns; an unchanged snapshot is acknowledged
+only when its bytes were confirmed by a successful load or save. Neither path
+retries a FreshBooks mutation.
+
 The final development gate is an opt-in real-QML smoke. Run it only from an
 Omarchy graphical session:
 

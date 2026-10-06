@@ -12,6 +12,8 @@ Item {
   property string unreadText: ""
   property bool ready: false
   property string _pendingTransactionId: ""
+  property string _pendingText: ""
+  property var _durableText: null
   readonly property bool recoveryLocked: recoveryError !== null
 
   signal loaded(var snapshot, var recoveryError, string unreadText)
@@ -24,6 +26,14 @@ Item {
     unreadText = result.unreadText
     ready = true
     loaded(restoredSnapshot, recoveryError, unreadText)
+  }
+
+  function completeSave() {
+    var transactionId = _pendingTransactionId
+    _durableText = _pendingText
+    _pendingTransactionId = ""
+    _pendingText = ""
+    saved(transactionId)
   }
 
   function save(snapshot, transactionId) {
@@ -48,7 +58,15 @@ Item {
       return
     }
     _pendingTransactionId = id
-    ledgerFile.setText(serialized)
+    _pendingText = serialized
+    // FileView is still completing its previous operation inside loaded/saved
+    // handlers. Defer the next write until that callback has returned.
+    Qt.callLater(function() {
+      // setText emits no saved signal for unchanged content. Only acknowledge
+      // bytes confirmed by a successful load/write, never an optimistic buffer.
+      if (serialized === root._durableText) root.completeSave()
+      else ledgerFile.setText(serialized)
+    })
   }
 
   FileView {
@@ -57,7 +75,10 @@ Item {
     atomicWrites: true
     printErrors: false
 
-    onLoaded: root.publishLoad(LedgerStoreModel.deserialize(String(text() || "")))
+    onLoaded: {
+      root._durableText = String(text() || "")
+      root.publishLoad(LedgerStoreModel.deserialize(root._durableText))
+    }
     onLoadFailed: {
       var unread = String(text() || "")
       if (unread !== "") root.publishLoad(LedgerStoreModel.deserialize(unread))
@@ -68,14 +89,11 @@ Item {
         effects: []
       })
     }
-    onSaved: {
-      var transactionId = root._pendingTransactionId
-      root._pendingTransactionId = ""
-      root.saved(transactionId)
-    }
+    onSaved: root.completeSave()
     onSaveFailed: function(error) {
       var transactionId = root._pendingTransactionId
       root._pendingTransactionId = ""
+      root._pendingText = ""
       root.failed(transactionId, error)
     }
   }
