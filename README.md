@@ -21,6 +21,12 @@ FreshBooks remains authoritative. The plugin refreshes timers and calendar range
 - Node.js 22 or newer
 - `freshbooks-cli` 0.3.0 or newer, authenticated and available as `freshbooks` on Quickshell's `PATH`; the CLI must advertise canonical tracking contract 2
 
+With Mise or another Node version manager, install the CLI for the Node version
+used by the desktop shell, not just a project-local version. Changing the global
+Node version can leave `freshbooks` available in a development terminal but
+unavailable to Quickshell. After a version change, reinstall the CLI for that
+runtime and check `freshbooks diagnostics status --json` from your home directory.
+
 ## Install
 
 After installing `freshbooks-cli`:
