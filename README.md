@@ -5,9 +5,15 @@ An Omarchy 4 / Quickshell bar plugin for managing FreshBooks timers and reviewin
 The popup provides:
 
 - a live Timer tab with notes, explicit duration correction, pause/resume, and log
-- a Projects tab ordered by the active and most recently used project/service combinations, with one-click safe switching, immediate loading from a disposable local cache, and an explicit FreshBooks refresh button
+- a Projects tab ordered by the active and most recently used project/service combinations, with one-click fresh timer sessions, immediate loading from a disposable local cache, and an explicit FreshBooks refresh button
 - a Sunday–Saturday calendar with daily and weekly logged totals and day-entry lists showing project, service, and notes; **Play** starts fresh time from an entry or resumes a matching paused timer, and **Stop** pauses a running timer with the same project, service, and notes
 - guided OAuth and business selection when FreshBooks has not been configured yet
+
+Selecting a project always starts a fresh timer with blank notes, even when its
+project/service matches the current timer. Any unfinished running or paused timer
+is saved first; if that save fails, no new timer starts. Saved entries remain
+separate with their existing notes and duration. Use the Timer tab's explicit
+pause/resume controls to continue an unfinished timer.
 
 Accepted edits update the panel immediately and close an open entry editor while the write settles. In the calendar editor, changing any valid note, duration, date, project, or service enables **Save** immediately. Before the CLI is started, the operation's typed draft and optimistic projection are saved atomically in Quickshell's state directory. A valid CLI mutation receipt is the fast path: it confirms the canonical result without a follow-up read.
 
@@ -17,7 +23,7 @@ Timer and calendar save status follows the latest operation for that record.
 A confirmed successful save clears an older failure banner; active conflicts,
 new unknown outcomes, and failures on unrelated records remain visible.
 
-FreshBooks remains authoritative. The plugin refreshes timers and calendar ranges when opened, after mutations that still require reconciliation, and 15 seconds after the previous visible refresh settles. The confirmed project list is cached in Quickshell's cache directory because it changes infrequently; opening the Projects tab uses that cache, while its refresh button replaces it from FreshBooks. Starting another project logs the current timer first; a failed log prevents the new timer from starting.
+FreshBooks remains authoritative. The plugin refreshes timers and calendar ranges when opened, after mutations that still require reconciliation, and 15 seconds after the previous visible refresh settles. The confirmed project list is cached in Quickshell's cache directory because it changes infrequently; opening the Projects tab uses that cache, while its refresh button replaces it from FreshBooks.
 
 ## Requirements
 
@@ -63,6 +69,17 @@ unchanged snapshots, then verifies the durable file. Ledger writes defer until
 the previous FileView callback returns; an unchanged snapshot is acknowledged
 only when its bytes were confirmed by a successful load or save. Neither path
 retries a FreshBooks mutation.
+
+Verify fresh project sessions through the real Panel, Service, and ledger with
+synthetic CLI receipts and isolated state/cache directories:
+
+```bash
+node --test test/project-start-runtime.test.js
+```
+
+This covers selecting the same project/service after running, paused, and saved
+timers: the previous task retains its notes/duration, and the new session has a
+distinct timer identity and blank notes. It never writes to FreshBooks.
 
 The final development gate is an opt-in real-QML smoke. Run it only from an
 Omarchy graphical session:

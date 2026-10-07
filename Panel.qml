@@ -379,12 +379,7 @@ Panel {
     if (!timeTracking || !shortcut) return
     var active = activeTimer
     if (active && !canMutateRecord(active)) return
-    var sameShortcut = active && String(active.projectId) === String(shortcut.projectId)
-      && String(active.serviceId) === String(shortcut.serviceId)
-    if (sameShortcut) {
-      if (timerRunning(active)) timeTracking.pause()
-      else timeTracking.resume()
-    } else if (active) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId)
+    if (active) timeTracking.switchTimer(shortcut.projectId, shortcut.serviceId, "")
     else timeTracking.start(shortcut.projectId, shortcut.serviceId, "")
   }
 
@@ -1076,12 +1071,8 @@ Panel {
                       anchors.right: parent.right
                       anchors.rightMargin: Style.space(6)
                       anchors.verticalCenter: parent.verticalCenter
-                      iconText: pending ? "󰦖"
-                        : (root.activeTimer
-                          && String(root.activeTimer.projectId) === String(modelData.projectId)
-                          && String(root.activeTimer.serviceId) === String(modelData.serviceId)
-                          && root.timerRunning(root.activeTimer) ? "󰏤" : "󰐊")
-                      tooltipText: pending ? root.pendingMessage : (iconText === "󰏤" ? "Pause timer" : "Start timer")
+                      iconText: pending ? "󰦖" : "󰐊"
+                      tooltipText: pending ? root.pendingMessage : "Start new timer"
                       foreground: projectRow.contentColor
                       hoverColor: projectRow.contentColor
                       fontFamily: root.fontFamily
