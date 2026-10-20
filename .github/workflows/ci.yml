@@ -15,9 +15,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Verify freshbooks-cli release contract
+      - name: Verify freshbooks-cli canonical contract
+        env:
+          FRESHBOOKS_CLI_REVISION: 43ab5a01b7e85f3921a908bea9ee682ab4d3ed4d
         run: |
-          git clone --depth 1 https://github.com/kmorey/freshbooks-cli.git "$RUNNER_TEMP/freshbooks-cli"
+          git init "$RUNNER_TEMP/freshbooks-cli"
+          git -C "$RUNNER_TEMP/freshbooks-cli" fetch --depth 1 https://github.com/kmorey/freshbooks-cli.git "$FRESHBOOKS_CLI_REVISION"
+          git -C "$RUNNER_TEMP/freshbooks-cli" checkout --detach FETCH_HEAD
           state_dir="$(mktemp -d)"
           diagnostics="$(
             XDG_CONFIG_HOME="$state_dir/config" \

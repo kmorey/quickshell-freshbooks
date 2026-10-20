@@ -60,6 +60,12 @@ Accepted but unsettled operations are stored in `kmorey.freshbooks-operation-led
 
 ## Development
 
+CI fetches the exact `freshbooks-cli` revision in `FRESHBOOKS_CLI_REVISION` in
+`.github/workflows/ci.yml` and verifies its diagnostics envelope, canonical contract,
+and mutation-receipt capabilities. The compatible CLI currently lives on
+`feat/smooth-conflict-settlement-cli`, not its older default branch; keep this pin
+explicit when updating the integration dependency.
+
 ```bash
 npm test
 omarchy plugin validate .
