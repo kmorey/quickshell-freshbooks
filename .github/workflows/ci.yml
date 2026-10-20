@@ -17,7 +17,7 @@ jobs:
           node-version: 22
       - name: Verify freshbooks-cli canonical contract
         env:
-          FRESHBOOKS_CLI_REVISION: 43ab5a01b7e85f3921a908bea9ee682ab4d3ed4d
+          FRESHBOOKS_CLI_REVISION: 4c96f3c04e78d222cc5f4c922e460867a66e5500
         run: |
           git init "$RUNNER_TEMP/freshbooks-cli"
           git -C "$RUNNER_TEMP/freshbooks-cli" fetch --depth 1 https://github.com/kmorey/freshbooks-cli.git "$FRESHBOOKS_CLI_REVISION"
