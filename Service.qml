@@ -406,6 +406,9 @@ Item {
   Connections {
     target: root.cliAdapter
     function onCompleted(completion) {
+      // Qt can deliver QVariantList array-likes through var signals. Rehydrate
+      // this JSON contract before the reducers' native-array checks and copies.
+      completion = JSON.parse(JSON.stringify(completion))
       var metadata = root.runtime.adapterCompleted(completion)
       root.adoptMetadata(metadata)
       root.publishView()
@@ -416,7 +419,7 @@ Item {
   ProjectCache {
     id: projectCache
     onLoaded: function(projects) {
-      root.runtime.seedProjects(projects)
+      root.runtime.seedProjects(JSON.parse(JSON.stringify(projects)))
       root.publishView()
     }
   }
@@ -425,7 +428,7 @@ Item {
   LedgerStore {
     id: ledgerStore
     onLoaded: function(snapshot, recoveryError, unreadText) {
-      root.runtime.startup(snapshot, recoveryError)
+      root.runtime.startup(JSON.parse(JSON.stringify(snapshot)), recoveryError)
       if (recoveryError) {
         root.lastErrorCode = String(recoveryError.code || "LEDGER_RECOVERY_FAILED")
         root.lastError = String(recoveryError.message || "The operation ledger could not be restored")

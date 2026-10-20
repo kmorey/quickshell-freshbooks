@@ -41,3 +41,36 @@ Before pulling or activating anything, preserve the visible pending note and dur
    - Completion: Quickshell has no stuck pending save, and FreshBooks has no lost or duplicate entry.
 
 If the live state cannot be inspected safely, stop after preserving the draft and record the exact unavailable observation; do not infer that the watchdog patch alone resolved the remote save.
+
+## 2026-10-20 empty plugin after Omarchy update
+
+The desktop was running Omarchy 4.0.6, Quickshell 0.3.2.r7, and Qt 6.12. The CLI
+launcher and authentication were healthy, and an authoritative read still showed
+the original running timer. The plugin reported no timer and showed no projects.
+
+An isolated native calendar edit reproduced the failure before any write:
+the CLI returned a valid record array, but after crossing a QML `var` signal its
+QVariantList representation failed `Array.isArray()`. The coordinator copied it
+as a numeric-keyed object, and the ledger ignored the resulting observation.
+The same signal boundary made durable snapshot restoration and cached project
+loading treat valid arrays as missing. The durable file itself remained intact.
+
+The targeted fix normalizes JSON-contract payloads at the service's CLI completion,
+ledger-loaded, and project-cache-loaded signal handlers. It does not relax contract
+validation, rewrite the ledger, or retry mutations. The change was applied to the
+repository and the installed service without deploying unrelated worktree changes.
+Drafts and ledger snapshots were preserved before restarting the kept-loaded service.
+
+The live Timer tab again showed the existing note, running elapsed time, and
+enabled Pause/Save controls. Projects and calendar totals loaded in their actual
+tabs. The original timer ID and semantic token were unchanged; no pause, save,
+or resubmission was performed. All 92 durable operations retained their IDs,
+states, and drafts, and the separate draft file remained byte-for-byte unchanged.
+Historical unresolved operations were not declared recovered.
+
+Verification: 166 reducer/model checks passed; native calendar edits, continuation,
+project start/switch, timer save, and persistence checks passed. A new offline
+startup regression proved pending edits, timer segments/duration, and nested
+cached project services survive signal delivery even with the CLI unavailable.
+It failed against the pre-fix service and passed against both source and installed
+service. Exact-installed calendar edit checks and plugin validation also passed.

@@ -37,6 +37,13 @@ Node version can leave `freshbooks` available in a development terminal but
 unavailable to Quickshell. After a version change, reinstall the CLI for that
 runtime and check `freshbooks diagnostics status --json` from your home directory.
 
+After updating plugin service code, run `omarchy restart shell`: the service is
+kept loaded across widget hot-reloads. Do not clear its ledger or drafts to fix
+an empty display. QML signal payloads are normalized back into JSON-native data
+before entering the reducers, because Qt's QVariantList array-likes fail
+`Array.isArray()` checks; otherwise valid timer reads, cached projects, and
+restored operations can disappear from the view.
+
 ## Install
 
 After installing `freshbooks-cli`:
@@ -69,6 +76,11 @@ unchanged snapshots, then verifies the durable file. Ledger writes defer until
 the previous FileView callback returns; an unchanged snapshot is acknowledged
 only when its bytes were confirmed by a successful load or save. Neither path
 retries a FreshBooks mutation.
+
+The offline startup regression also restores an interrupted edit, a paused timer
+with its segment and duration, and cached project/service choices while the CLI
+is unavailable. The interrupted edit must remain unknown with its local note
+preserved, never appear applied or disappear during restoration.
 
 Verify fresh project sessions through the real Panel, Service, and ledger with
 synthetic CLI receipts and isolated state/cache directories:
